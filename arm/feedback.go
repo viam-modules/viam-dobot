@@ -5,9 +5,9 @@
 //   - q_actual          : 6 joint angles in DEGREES (offset 432)
 //   - tool_vector_actual: TCP pose [x,y,z,rx,ry,rz] in mm + DEGREES (offset 624)
 //   - robot_mode        : controller mode enum (offset 24)
-//   - enable_status     : 1 if servos enabled (offset 1027)
-//   - running_status    : 1 if executing motion (offset 1029)
-//   - error_status      : 1 if alarm latched (offset 1030)
+//   - enable_status     : 1 if servos enabled (offset 1026)
+//   - running_status    : 1 if executing motion (offset 1028)
+//   - error_status      : 1 if alarm latched (offset 1029)
 //
 // A magic value at offset 48 (test_value = 0x123456789ABCDEF) is checked on
 // every packet so we drop torn frames cheaply.
@@ -41,9 +41,9 @@ const (
 	offTestValue        = 48   // uint64
 	offQActual          = 432  // float64[6] degrees
 	offToolVectorActual = 624  // float64[6] (mm,mm,mm,deg,deg,deg)
-	offEnableStatus     = 1027 // byte
-	offRunningStatus    = 1029 // byte
-	offErrorStatus      = 1030 // byte
+	offEnableStatus     = 1026 // byte
+	offRunningStatus    = 1028 // byte
+	offErrorStatus      = 1029 // byte
 )
 
 // feedbackFrame is a snapshot of the most recent valid packet.

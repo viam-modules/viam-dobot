@@ -40,17 +40,37 @@ func TestKinematicsParse(t *testing.T) {
 // TestFeedbackParse builds a synthetic 1440-byte packet with a known magic,
 // joint vector, TCP vector, and status flags and confirms parseFeedback
 // returns the right values.
+//
+// The status bytes are written at LITERAL byte offsets (1025–1030), matching
+// the documented V4.6 feedback layout, rather than via the offEnableStatus/
+// offRunningStatus/offErrorStatus constants the parser reads back with. Using
+// the same constants to write and read would make this test blind to an
+// off-by-one in those constants. The immediate neighbor bytes (BrakeStatus,
+// DragStatus, JogStatusCR) are deliberately set to the OPPOSITE value of the
+// three fields under test, so any one-byte shift in either direction flips at
+// least one asserted flag and fails the test loudly.
 func TestFeedbackParse(t *testing.T) {
+	// Guard: the parser's status-byte offsets must match the documented
+	// V4.6 layout. If these drift, the literal-offset packet below would no
+	// longer line up and the assertions would silently test the wrong bytes.
+	if offEnableStatus != 1026 || offRunningStatus != 1028 || offErrorStatus != 1029 {
+		t.Fatalf("status-byte offsets drifted from the documented V4.6 layout: enable=%d running=%d error=%d (want 1026/1028/1029)", offEnableStatus, offRunningStatus, offErrorStatus)
+	}
+
 	buf := make([]byte, feedbackPacketSize)
 
 	// magic
 	binary.LittleEndian.PutUint64(buf[offTestValue:], feedbackMagic)
 	// robot mode = RobotModeRunning
 	binary.LittleEndian.PutUint64(buf[offRobotMode:], uint64(RobotModeRunning))
-	// status bytes
-	buf[offEnableStatus] = 1
-	buf[offRunningStatus] = 1
-	buf[offErrorStatus] = 0
+	// Status bytes at LITERAL offsets from the V4.6 byte-position table.
+	// Neighbors are set to the opposite value to catch off-by-one drift.
+	buf[1025] = 0 // BrakeStatus   (neighbor below EnableStatus)
+	buf[1026] = 1 // EnableStatus  (under test -> Enabled == true)
+	buf[1027] = 0 // DragStatus    (neighbor between Enable and Running)
+	buf[1028] = 1 // RunningStatus (under test -> Running == true)
+	buf[1029] = 0 // ErrorStatus   (under test -> HasError == false)
+	buf[1030] = 1 // JogStatusCR   (neighbor above ErrorStatus)
 
 	// joint angles in degrees
 	jointAngles := [6]float64{0, -90, 90, 0, 90, 0}
