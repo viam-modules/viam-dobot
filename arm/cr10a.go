@@ -454,21 +454,13 @@ func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 	case "stop_drag":
 		return map[string]interface{}{"ok": true}, a.dash.stopDrag(ctx)
 	case "set_drag_sensitivity":
-		v, ok := cmd["value"].(float64) // JSON numbers come in as float64
-		if !ok {
-			return nil, errors.New(`set_drag_sensitivity requires "value" int 1..90 and optional "index" int 0..6`)
-		}
-		value := int(v)
-		if value < 1 || value > 90 {
-			return nil, errors.New(`set_drag_sensitivity requires "value" int 1..90 and optional "index" int 0..6`)
-		}
-		// index is optional; missing/non-numeric means 0 (all axes).
-		index := 0
-		if iv, ok := cmd["index"].(float64); ok {
-			index = int(iv)
-			if index < 0 || index > 6 {
-				return nil, errors.New(`set_drag_sensitivity requires "value" int 1..90 and optional "index" int 0..6`)
-			}
+		// Unlike set_speed (which silently clamps), this rejects out-of-range
+		// input — a deliberate UX choice so a bad sensitivity is surfaced rather
+		// than quietly coerced. The wire-level dragSensivity clamp remains as a
+		// defensive invariant.
+		index, value, err := parseDragSensitivityArgs(cmd)
+		if err != nil {
+			return nil, err
 		}
 		return map[string]interface{}{"ok": true}, a.dash.dragSensivity(ctx, index, value)
 	default:
@@ -477,6 +469,31 @@ func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 }
 
 // ---------- helpers ----------
+
+// parseDragSensitivityArgs validates the set_drag_sensitivity DoCommand args.
+// value is required and must be 1..90; index is optional (missing/non-numeric
+// defaults to 0 = all axes) and, when present, must be 0..6. JSON numbers
+// arrive as float64; the int() truncation toward zero is intentional and
+// mirrors the set_speed handler (e.g. 1.9 → 1). The value and index failures
+// return distinct messages so callers can tell which argument was wrong.
+func parseDragSensitivityArgs(cmd map[string]interface{}) (index, value int, err error) {
+	v, ok := cmd["value"].(float64) // JSON numbers come in as float64
+	if !ok {
+		return 0, 0, errors.New(`set_drag_sensitivity requires "value" int 1..90`)
+	}
+	value = int(v)
+	if value < 1 || value > 90 {
+		return 0, 0, errors.New(`set_drag_sensitivity requires "value" int 1..90`)
+	}
+	// index is optional; missing/non-numeric means 0 (all axes).
+	if iv, ok := cmd["index"].(float64); ok {
+		index = int(iv)
+		if index < 0 || index > 6 {
+			return 0, 0, errors.New(`set_drag_sensitivity "index" must be int 0..6`)
+		}
+	}
+	return index, value, nil
+}
 
 // latestFrame fetches the latest feedback frame, blocking briefly if none has
 // arrived yet (typical right after Reconfigure).

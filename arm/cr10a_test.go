@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"strings"
 	"testing"
 
 	"go.viam.com/rdk/referenceframe"
@@ -190,5 +191,104 @@ func TestParseDashResp(t *testing.T) {
 			t.Errorf("parseDashResp(%q) = %+v; want err=%d result=%q cmd=%q",
 				tc.in, got, tc.wantErr, tc.wantResult, tc.wantCommand)
 		}
+	}
+}
+
+// TestParseDragSensitivityArgs covers the set_drag_sensitivity arg parsing:
+// required value (1..90), optional index (default 0, else 0..6), float64→int
+// truncation, and — critically — that the index-out-of-range failure returns a
+// DISTINCT message from the value failure so callers can tell them apart.
+func TestParseDragSensitivityArgs(t *testing.T) {
+	const valueMsgSub = `"value"`
+	const indexMsgSub = `"index"`
+
+	cases := []struct {
+		name      string
+		cmd       map[string]interface{}
+		wantIndex int
+		wantValue int
+		wantErr   bool
+		// errMsgSub, if set, must be a substring of the returned error so we
+		// can prove the value vs index failures are distinguishable.
+		errMsgSub string
+	}{
+		{
+			name:      "value only -> index defaults to 0",
+			cmd:       map[string]interface{}{"value": float64(50)},
+			wantIndex: 0,
+			wantValue: 50,
+		},
+		{
+			name:      "index and value valid",
+			cmd:       map[string]interface{}{"index": float64(3), "value": float64(20)},
+			wantIndex: 3,
+			wantValue: 20,
+		},
+		{
+			name:      "missing value -> value error",
+			cmd:       map[string]interface{}{"index": float64(2)},
+			wantErr:   true,
+			errMsgSub: valueMsgSub,
+		},
+		{
+			name:      "value 0 -> value error",
+			cmd:       map[string]interface{}{"value": float64(0)},
+			wantErr:   true,
+			errMsgSub: valueMsgSub,
+		},
+		{
+			name:      "value 100 -> value error",
+			cmd:       map[string]interface{}{"value": float64(100)},
+			wantErr:   true,
+			errMsgSub: valueMsgSub,
+		},
+		{
+			name:      "index 7 -> distinct index error",
+			cmd:       map[string]interface{}{"index": float64(7), "value": float64(50)},
+			wantErr:   true,
+			errMsgSub: indexMsgSub,
+		},
+		{
+			name:      "index -1 -> distinct index error",
+			cmd:       map[string]interface{}{"index": float64(-1), "value": float64(50)},
+			wantErr:   true,
+			errMsgSub: indexMsgSub,
+		},
+		{
+			// Truncation toward zero is intentional and matches set_speed's
+			// int(v): 1.9 becomes 1 (valid), not 2.
+			name:      "fractional value truncates toward zero",
+			cmd:       map[string]interface{}{"value": float64(1.9)},
+			wantIndex: 0,
+			wantValue: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			index, value, err := parseDragSensitivityArgs(tc.cmd)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got index=%d value=%d nil err", index, value)
+				}
+				if tc.errMsgSub != "" && !strings.Contains(err.Error(), tc.errMsgSub) {
+					t.Errorf("error %q does not contain %q (value/index messages must be distinguishable)", err.Error(), tc.errMsgSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if index != tc.wantIndex || value != tc.wantValue {
+				t.Errorf("got (index=%d, value=%d), want (index=%d, value=%d)", index, value, tc.wantIndex, tc.wantValue)
+			}
+		})
+	}
+
+	// Sanity: the value and index failures really do produce different text.
+	_, _, valErr := parseDragSensitivityArgs(map[string]interface{}{"value": float64(0)})
+	_, _, idxErr := parseDragSensitivityArgs(map[string]interface{}{"value": float64(50), "index": float64(9)})
+	if valErr == nil || idxErr == nil || valErr.Error() == idxErr.Error() {
+		t.Fatalf("value error %v and index error %v must be non-nil and distinct", valErr, idxErr)
 	}
 }

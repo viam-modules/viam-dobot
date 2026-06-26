@@ -111,12 +111,13 @@ frame system).
 
 ## Limitations / not yet implemented
 
-- **Drag-teach mode (basic).** Available via the `start_drag` / `stop_drag` /
-  `set_drag_sensitivity` DoCommand actions (`StartDrag()` / `StopDrag()` /
-  `DragSensivity(index,value)`). The controller refuses to enter drag while an
-  alarm is latched — `clear_error` first. The per-style "alldrag / gesture /
-  translation" drag variants are a DobotStudioPro HTTP-API feature, not part of
-  the ASCII protocol this module speaks, so they are not exposed.
+- **Drag-teach mode (partial).** Basic drag/freedrive *is* exposed via the
+  `start_drag` / `stop_drag` / `set_drag_sensitivity` DoCommand actions
+  (`StartDrag()` / `StopDrag()` / `DragSensivity(index,value)`); the controller
+  refuses to enter drag while an alarm is latched, so `clear_error` first. What
+  is **not** implemented are the per-style "alldrag / gesture / translation"
+  drag variants — those are a DobotStudioPro HTTP-API feature, not part of the
+  ASCII protocol this module speaks.
 - **No tool / user frames.** Calls assume tool=0, user=0. If you need to
   drive a non-base coord system, set it once via DoCommand passthrough
   (you can extend the switch in `cr10a.go`).
