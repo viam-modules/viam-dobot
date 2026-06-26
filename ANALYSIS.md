@@ -1,3 +1,9 @@
+> **Superseded (point-in-time review).** This document is a historical snapshot from an
+> earlier review and describes code that has since changed. In particular, the V4 wire
+> commands were corrected to `VelJ` / `MovJ(joint={…})` (not `SpeedJ` / `JointMovJ`) and the
+> feedback status-byte offsets to `1026/1028/1029` on the `fix/v4-wire-protocol` branch.
+> Treat the specifics below as dated; the current code and `CLAUDE.md` are authoritative.
+
 ## Verdict
 
 **It's a legitimate Viam arm module.** Builds clean (`go build ./...` and `make test` pass), registers correctly via `module.ModularMain`, implements the full `arm.Arm` surface, has the right shape vs. both UR and xArm. But it was written without ever talking to a real controller, and there are a few real bugs that unit tests won't catch.
@@ -18,7 +24,7 @@
 | Latched-alarm surfacing via `error_status` byte | ✓ | ✓ via state register | ✓ via safety bits |
 | `Reconfigure` replaces both TCP clients on host change | ✓ | xArm uses `AlwaysRebuild` — different but valid | ✓ |
 
-The protocol parsing matches the published Dobot CR-series spec (29999 ASCII command/ack, 30004 1440-byte packed binary at 125 Hz, magic at offset 48, joint angles at 432, status bytes at 1027/1029/1030). The kinematics JSON is structurally well-formed and link lengths match the README's URDF-derived numbers.
+The protocol parsing matches the published Dobot CR-series spec (29999 ASCII command/ack, 30004 1440-byte packed binary at 125 Hz, magic at offset 48, joint angles at 432, status bytes at 1026/1028/1029). The kinematics JSON is structurally well-formed and link lengths match the README's URDF-derived numbers.
 
 ## Bugs you should care about
 
