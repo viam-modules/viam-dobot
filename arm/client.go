@@ -275,6 +275,32 @@ func (c *dashClient) robotMode(ctx context.Context) (int, error) {
 	return parts[0], nil
 }
 
+// startDrag enters drag/freedrive mode so an operator can backdrive the arm by
+// hand. The controller refuses StartDrag() while an alarm is latched, so issue
+// clearError() first if this returns an error.
+func (c *dashClient) startDrag(ctx context.Context) error {
+	return c.expectOK(ctx, "StartDrag()")
+}
+
+// stopDrag exits drag/freedrive mode.
+func (c *dashClient) stopDrag(ctx context.Context) error {
+	return c.expectOK(ctx, "StopDrag()")
+}
+
+// dragSensivity sets the drag resistance. index selects the axis (0 = all axes,
+// 1..6 = J1..J6); value is 1..90 where smaller means more resistance (stiffer).
+// value is clamped into [1,90] here, mirroring speedFactor; the caller is
+// responsible for validating index (0..6). Keep the controller's spelling
+// "DragSensivity" (one 't') — that is the real wire command, not a typo.
+func (c *dashClient) dragSensivity(ctx context.Context, index, value int) error {
+	if value < 1 {
+		value = 1
+	} else if value > 90 {
+		value = 90
+	}
+	return c.expectOK(ctx, fmt.Sprintf("DragSensivity(%d,%d)", index, value))
+}
+
 // expectOK is a helper that errors on a non-zero ErrorID.
 func (c *dashClient) expectOK(ctx context.Context, cmd string) error {
 	resp, err := c.send(ctx, cmd)

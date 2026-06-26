@@ -93,6 +93,31 @@ func TestDashWireStrings(t *testing.T) {
 			call: func(c *dashClient) error { return c.stop(context.Background()) },
 			want: "Stop()",
 		},
+		{
+			name: "startDrag",
+			call: func(c *dashClient) error { return c.startDrag(context.Background()) },
+			want: "StartDrag()",
+		},
+		{
+			name: "stopDrag",
+			call: func(c *dashClient) error { return c.stopDrag(context.Background()) },
+			want: "StopDrag()",
+		},
+		{
+			name: "dragSensivity",
+			call: func(c *dashClient) error { return c.dragSensivity(context.Background(), 0, 50) },
+			want: "DragSensivity(0,50)",
+		},
+		{
+			name: "dragSensivity clamps high",
+			call: func(c *dashClient) error { return c.dragSensivity(context.Background(), 3, 200) },
+			want: "DragSensivity(3,90)",
+		},
+		{
+			name: "dragSensivity clamps low",
+			call: func(c *dashClient) error { return c.dragSensivity(context.Background(), 1, 0) },
+			want: "DragSensivity(1,1)",
+		},
 	}
 
 	for _, tc := range cases {

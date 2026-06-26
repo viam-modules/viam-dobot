@@ -53,7 +53,7 @@ The `arm/` package is split into three files that correspond to the three concer
 
 ### DoCommand is the escape hatch
 
-The `arm.Arm` interface doesn't expose Dobot-specific actions, so `enable`/`disable`/`clear_error`/`emergency_stop`/`set_speed`/`robot_mode` go through `DoCommand`. The action is a string under the `"action"` key. JSON numbers come in as `float64` — note the cast in the `set_speed` handler. When adding new actions, follow the same pattern (string action key, return `{"ok": true}` on success, surface errors directly).
+The `arm.Arm` interface doesn't expose Dobot-specific actions, so `enable`/`disable`/`clear_error`/`emergency_stop`/`set_speed`/`robot_mode`/`start_drag`/`stop_drag`/`set_drag_sensitivity` go through `DoCommand`. The action is a string under the `"action"` key. JSON numbers come in as `float64` — note the cast in the `set_speed` and `set_drag_sensitivity` handlers. When adding new actions, follow the same pattern (string action key, return `{"ok": true}` on success, surface errors directly). The drag actions map to the `StartDrag()`/`StopDrag()`/`DragSensivity(index,value)` wire commands — the controller refuses drag while an alarm is latched, so `clear_error` first.
 
 ## Testing notes
 

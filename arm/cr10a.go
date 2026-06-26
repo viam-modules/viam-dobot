@@ -411,6 +411,12 @@ func (a *cr10a) IsMoving(ctx context.Context) (bool, error) {
 //   - {"action": "emergency_stop"}→ EmergencyStop(1)
 //   - {"action": "set_speed", "value": 1..100} → SpeedFactor(value), persisted
 //   - {"action": "robot_mode"}    → returns {"mode": <int>}
+//   - {"action": "start_drag"}    → StartDrag() (enter drag/freedrive; refused
+//     while an alarm is latched — clear_error first)
+//   - {"action": "stop_drag"}     → StopDrag()
+//   - {"action": "set_drag_sensitivity", "value": 1..90, "index": 0..6} →
+//     DragSensivity(index,value); index 0 = all axes (default), 1..6 = J1..J6;
+//     smaller value = more resistance
 func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -443,6 +449,28 @@ func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 			return nil, err
 		}
 		return map[string]interface{}{"mode": mode}, nil
+	case "start_drag":
+		return map[string]interface{}{"ok": true}, a.dash.startDrag(ctx)
+	case "stop_drag":
+		return map[string]interface{}{"ok": true}, a.dash.stopDrag(ctx)
+	case "set_drag_sensitivity":
+		v, ok := cmd["value"].(float64) // JSON numbers come in as float64
+		if !ok {
+			return nil, errors.New(`set_drag_sensitivity requires "value" int 1..90 and optional "index" int 0..6`)
+		}
+		value := int(v)
+		if value < 1 || value > 90 {
+			return nil, errors.New(`set_drag_sensitivity requires "value" int 1..90 and optional "index" int 0..6`)
+		}
+		// index is optional; missing/non-numeric means 0 (all axes).
+		index := 0
+		if iv, ok := cmd["index"].(float64); ok {
+			index = int(iv)
+			if index < 0 || index > 6 {
+				return nil, errors.New(`set_drag_sensitivity requires "value" int 1..90 and optional "index" int 0..6`)
+			}
+		}
+		return map[string]interface{}{"ok": true}, a.dash.dragSensivity(ctx, index, value)
 	default:
 		return nil, fmt.Errorf("unknown action %q", action)
 	}

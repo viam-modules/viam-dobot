@@ -68,6 +68,9 @@ available via `DoCommand`:
 | `{"action": "emergency_stop"}`              | Software E-stop |
 | `{"action": "set_speed", "value": 1..100}`  | `SpeedFactor(value)` |
 | `{"action": "robot_mode"}`                  | Returns `{"mode": <int>}` per the CR-series RobotMode enum |
+| `{"action": "start_drag"}`                  | `StartDrag()` — enter drag/freedrive (refused while an alarm is latched; `clear_error` first) |
+| `{"action": "stop_drag"}`                   | `StopDrag()` — exit drag/freedrive |
+| `{"action": "set_drag_sensitivity", "value": 1..90, "index": 0..6}` | `DragSensivity(index,value)`; `index` 0 = all axes (default), 1..6 = J1..J6; smaller `value` = more resistance |
 
 ## Build
 
@@ -108,9 +111,12 @@ frame system).
 
 ## Limitations / not yet implemented
 
-- **No drag-teach mode.** `RobotMode()` reports drag as mode 6/8, but the
-  driver doesn't expose a way to enter it. Easy to add via DoCommand if
-  needed.
+- **Drag-teach mode (basic).** Available via the `start_drag` / `stop_drag` /
+  `set_drag_sensitivity` DoCommand actions (`StartDrag()` / `StopDrag()` /
+  `DragSensivity(index,value)`). The controller refuses to enter drag while an
+  alarm is latched — `clear_error` first. The per-style "alldrag / gesture /
+  translation" drag variants are a DobotStudioPro HTTP-API feature, not part of
+  the ASCII protocol this module speaks, so they are not exposed.
 - **No tool / user frames.** Calls assume tool=0, user=0. If you need to
   drive a non-base coord system, set it once via DoCommand passthrough
   (you can extend the switch in `cr10a.go`).
