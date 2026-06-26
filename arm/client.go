@@ -218,8 +218,11 @@ func (c *dashClient) clearError(ctx context.Context) error {
 	return c.expectOK(ctx, "ClearError()")
 }
 
+// emergencyStop presses the E-stop (mode 1). This disables the arm AND latches
+// an alarm; recovery requires releasing the E-stop (mode 0) and a ClearError().
+// For a soft halt of in-flight motion, use stop() (Stop()) instead.
 func (c *dashClient) emergencyStop(ctx context.Context) error {
-	return c.expectOK(ctx, "EmergencyStop()")
+	return c.expectOK(ctx, "EmergencyStop(1)")
 }
 
 // stop halts the in-flight motion command queue. The V4 wire command for this
@@ -240,8 +243,8 @@ func (c *dashClient) speedFactor(ctx context.Context, percent int) error {
 	return c.expectOK(ctx, fmt.Sprintf("SpeedFactor(%d)", percent))
 }
 
-func (c *dashClient) speedJ(ctx context.Context, percent int) error {
-	return c.expectOK(ctx, fmt.Sprintf("SpeedJ(%d)", clampPct(percent)))
+func (c *dashClient) velJ(ctx context.Context, percent int) error {
+	return c.expectOK(ctx, fmt.Sprintf("VelJ(%d)", clampPct(percent)))
 }
 
 func (c *dashClient) accJ(ctx context.Context, percent int) error {
@@ -251,7 +254,7 @@ func (c *dashClient) accJ(ctx context.Context, percent int) error {
 // jointMovJ moves PTP in joint space; angles are degrees.
 func (c *dashClient) jointMovJ(ctx context.Context, j [6]float64) error {
 	return c.expectOK(ctx, fmt.Sprintf(
-		"JointMovJ(%.4f,%.4f,%.4f,%.4f,%.4f,%.4f)",
+		"MovJ(joint={%.4f,%.4f,%.4f,%.4f,%.4f,%.4f})",
 		j[0], j[1], j[2], j[3], j[4], j[5]))
 }
 
@@ -295,14 +298,15 @@ func clampPct(p int) int {
 
 // RobotMode constants (per Dobot CR-series TCP/IP protocol).
 const (
-	RobotModeInit      = 1
-	RobotModeBrakeOpen = 2
-	RobotModeDisabled  = 4
-	RobotModeEnabled   = 5
-	RobotModeBackdrive = 6
-	RobotModeRunning   = 7
-	RobotModeRecording = 8
-	RobotModeError     = 9
-	RobotModePaused    = 10
-	RobotModeJog       = 11
+	RobotModeInit       = 1
+	RobotModeBrakeOpen  = 2
+	RobotModePowerOff   = 3
+	RobotModeDisabled   = 4
+	RobotModeEnabled    = 5
+	RobotModeBackdrive  = 6
+	RobotModeRunning    = 7
+	RobotModeSingleMove = 8
+	RobotModeError      = 9
+	RobotModePaused     = 10
+	RobotModeCollision  = 11
 )

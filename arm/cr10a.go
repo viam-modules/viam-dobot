@@ -44,7 +44,7 @@ var cr10aKinematicsJSON []byte
 // Defaults that match Dobot's documented safe values.
 const (
 	defaultSpeedFactor = 50 // global SpeedFactor() percent (1..100)
-	defaultJointSpeed  = 50 // SpeedJ() percent (1..100)
+	defaultJointSpeed  = 50 // VelJ() percent (1..100)
 	defaultJointAccel  = 50 // AccJ() percent (1..100)
 
 	// motionPollInterval is how often we re-check feedback while a motion is
@@ -61,7 +61,7 @@ const (
 	jointToleranceDeg = 0.5
 
 	// maxJointSpeedDegPerSec is the controller's nominal 100% joint velocity in
-	// degrees/sec. Used to convert MoveOptions.MaxVelRads into the SpeedJ 1..100
+	// degrees/sec. Used to convert MoveOptions.MaxVelRads into the VelJ 1..100
 	// percent the wire protocol takes. The CR10A datasheet quotes per-joint
 	// maxes in the 180–225 °/s range; 180 is the conservative floor across
 	// joints. If you tune the controller for higher max speed and the planner
@@ -203,8 +203,8 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 	if err := a.dash.speedFactor(ctx, speedFactor); err != nil {
 		a.logger.CWarnw(ctx, "SpeedFactor failed", "err", err)
 	}
-	if err := a.dash.speedJ(ctx, jointSpeed); err != nil {
-		a.logger.CWarnw(ctx, "SpeedJ failed", "err", err)
+	if err := a.dash.velJ(ctx, jointSpeed); err != nil {
+		a.logger.CWarnw(ctx, "VelJ failed", "err", err)
 	}
 	if err := a.dash.accJ(ctx, jointAccel); err != nil {
 		a.logger.CWarnw(ctx, "AccJ failed", "err", err)
@@ -367,14 +367,14 @@ func (a *cr10a) moveJoint(ctx context.Context, joints []referenceframe.Input, op
 			accelPct = radPerSecToPercent(opts.MaxAccRads, maxJointAccelDegPerSec2)
 		}
 	}
-	if err := a.dash.speedJ(ctx, speedPct); err != nil {
-		return fmt.Errorf("SpeedJ: %w", err)
+	if err := a.dash.velJ(ctx, speedPct); err != nil {
+		return fmt.Errorf("VelJ: %w", err)
 	}
 	if err := a.dash.accJ(ctx, accelPct); err != nil {
 		return fmt.Errorf("AccJ: %w", err)
 	}
 	if err := a.dash.jointMovJ(ctx, degTarget); err != nil {
-		return fmt.Errorf("JointMovJ: %w", err)
+		return fmt.Errorf("MovJ: %w", err)
 	}
 	return a.waitForMotionCompleteLocked(ctx, degTarget)
 }
@@ -408,7 +408,7 @@ func (a *cr10a) IsMoving(ctx context.Context) (bool, error) {
 //   - {"action": "enable"}        → EnableRobot()
 //   - {"action": "disable"}       → DisableRobot()
 //   - {"action": "clear_error"}   → ClearError()
-//   - {"action": "emergency_stop"}→ EmergencyStop()
+//   - {"action": "emergency_stop"}→ EmergencyStop(1)
 //   - {"action": "set_speed", "value": 1..100} → SpeedFactor(value), persisted
 //   - {"action": "robot_mode"}    → returns {"mode": <int>}
 func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
@@ -532,7 +532,7 @@ completed:
 }
 
 // radPerSecToPercent maps a velocity/acceleration in radians/sec (or rad/s²)
-// to the 1..100 SpeedJ/AccJ percent the controller takes, given an absolute
+// to the 1..100 VelJ/AccJ percent the controller takes, given an absolute
 // max in degrees/sec for "100%".
 func radPerSecToPercent(radPerSec, maxDegPerSec float64) int {
 	deg := rdkutils.RadToDeg(radPerSec)

@@ -116,7 +116,7 @@ func TestFeedbackInvalidatesOnError(t *testing.T) {
 }
 
 // TestRadPerSecToPercent covers the conversion that maps planner-supplied
-// joint velocity/accel limits (rad/s) to the controller's 1..100 SpeedJ/AccJ
+// joint velocity/accel limits (rad/s) to the controller's 1..100 VelJ/AccJ
 // percent. Clamping at both ends matters because Dobot rejects values outside
 // 1..100, and a planner request below 1% would otherwise round to 0.
 func TestRadPerSecToPercent(t *testing.T) {

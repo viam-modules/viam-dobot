@@ -16,12 +16,12 @@ Registered model: `viam-soleng:dobot:cr10a`.
 - **Full Viam motion-planning integration.** Implements
   `framesystem.InputEnabled`, `Geometries`, and `Kinematics`, so the motion
   service plans in joint space using the supplied SVA model.
-- **Safe blocking semantics.** `MoveToJointPositions` issues `JointMovJ` and
-  blocks until the controller's `running_status` clears AND the encoder
+- **Safe blocking semantics.** `MoveToJointPositions` issues `MovJ(joint={...})`
+  and blocks until the controller's `running_status` clears AND the encoder
   values are within tolerance of the target — so callers can chain moves
   without races.
 - **Cancellation via context.** Cancel ctx during a move and the driver
-  issues `StopScript()` before returning `ctx.Err()`.
+  issues `Stop()` before returning `ctx.Err()`.
 - **Latched-alarm detection.** If the controller raises an error mid-move,
   the call returns a descriptive error; reset with `DoCommand({"action":"clear_error"})`.
 
@@ -51,7 +51,7 @@ Add to the `services` / `components` section of your robot config:
 | `dashboard_port` | int  | 29999 | Command/ack port. |
 | `feedback_port`  | int  | 30004 | Real-time broadcast port. |
 | `speed_factor`   | int  | 50    | Global `SpeedFactor()` percent (1..100). |
-| `joint_speed`    | int  | 50    | Per-`MovJ` `SpeedJ` percent. |
+| `joint_speed`    | int  | 50    | Per-`MovJ` `VelJ` percent. |
 | `joint_accel`    | int  | 50    | Per-`MovJ` `AccJ` percent. |
 | `auto_enable`    | bool | true  | Issue `EnableRobot()` at module start. |
 
