@@ -219,8 +219,9 @@ func (c *dashClient) clearError(ctx context.Context) error {
 }
 
 // emergencyStop presses the E-stop (mode 1). This disables the arm AND latches
-// an alarm; recovery requires releasing the E-stop (mode 0) and a ClearError().
-// For a soft halt of in-flight motion, use stop() (Stop()) instead.
+// an alarm; recovery requires physically releasing the E-stop and then a
+// ClearError() (the only code-level recovery this module surfaces). For a soft
+// halt of in-flight motion, use stop() (Stop()) instead.
 func (c *dashClient) emergencyStop(ctx context.Context) error {
 	return c.expectOK(ctx, "EmergencyStop(1)")
 }

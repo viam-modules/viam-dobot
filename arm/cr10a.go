@@ -331,7 +331,7 @@ func (a *cr10a) GoToInputs(ctx context.Context, steps ...[]referenceframe.Input)
 	return a.MoveThroughJointPositions(ctx, steps, nil, nil)
 }
 
-// moveJoint is the single place that issues a JointMovJ. Callers may supply
+// moveJoint is the single place that issues a `MovJ(joint=…)`. Callers may supply
 // MoveOptions to override speed/accel for this move; nil falls back to the
 // values set in Reconfigure. The RLock is held through the wire calls and the
 // completion poll so a concurrent Close/Reconfigure can't yank the dash client
@@ -467,7 +467,7 @@ func (a *cr10a) latestFrame(ctx context.Context) (feedbackFrame, error) {
 // is no longer running and the joint positions are within tolerance of the
 // target. Returns an error if the controller latched an alarm during the move.
 //
-// The caller MUST hold a.mu.RLock — moveJoint takes it across the JointMovJ
+// The caller MUST hold a.mu.RLock — moveJoint takes it across the `MovJ(joint=…)`
 // and the entire wait, so a.dash is stable for the duration.
 func (a *cr10a) waitForMotionCompleteLocked(ctx context.Context, targetDeg [6]float64) error {
 	startCtx, cancelGrace := context.WithTimeout(ctx, motionStartGrace)

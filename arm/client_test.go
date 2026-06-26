@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runDashCmd drives a single dashboard command wrapper against an in-process
@@ -26,16 +27,33 @@ func runDashCmd(t *testing.T, reply string, call func(*dashClient) error) (strin
 	c.scanner.Split(splitOnSemicolon)
 
 	// fake dashboard: read exactly one command line, capture it, then reply.
+	// The read deadline guarantees the goroutine can't block forever if the
+	// wrapper never writes a '\n'-terminated frame — it unblocks, replies
+	// anyway (so call() doesn't hang on its own read), and reports what it
+	// captured so the assertion fails cleanly instead of hanging until the
+	// `go test` timeout.
 	got := make(chan string, 1)
 	go func() {
+		_ = server.SetReadDeadline(time.Now().Add(2 * time.Second))
 		r := bufio.NewReader(server)
 		line, _ := r.ReadString('\n')
 		got <- strings.TrimRight(line, "\r\n")
 		_, _ = server.Write([]byte(reply))
 	}()
 
+	// call() drives the wrapper's write+read. net.Pipe is synchronous, so this
+	// must run concurrently with the server goroutine above — it returns once
+	// the command is written and the reply is read, by which point `got` holds
+	// the captured line.
 	err := call(c)
-	return <-got, err
+
+	select {
+	case g := <-got:
+		return g, err
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fake dashboard to capture the command")
+		return "", nil
+	}
 }
 
 // TestDashWireStrings asserts the EXACT wire string each fixed command wrapper
