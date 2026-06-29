@@ -17,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -170,7 +172,7 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 		return err
 	}
 
-	model, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, conf.ResourceName().ShortName())
+	model, err := makeModelFrame(newConf, conf.ResourceName().ShortName())
 	if err != nil {
 		return fmt.Errorf("loading CR10A kinematics: %w", err)
 	}
@@ -623,4 +625,24 @@ func orDefault[T int](v, def T) T {
 		return def
 	}
 	return v
+}
+
+// makeModelFrame builds the kinematic model from either the embedded capsule
+// JSON (default) or the bundled URDF + meshes (when conf.UseURDF). The URDF
+// path is resolved against VIAM_MODULE_ROOT, which viam-server sets to the
+// unpacked module directory.
+func makeModelFrame(conf *Config, name string) (referenceframe.Model, error) {
+	if !conf.UseURDF {
+		return referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, name)
+	}
+	ratios := conf.MeshDecimationRatios
+	if len(ratios) == 0 {
+		ratios = []float64{0.1, 0.1, 0.1, 0.1, 0.1, 0.1}
+	}
+	path := filepath.Join(os.Getenv("VIAM_MODULE_ROOT"), "arm", "cr10a.urdf")
+	model, err := referenceframe.ParseModelXMLFile(path, name, ratios)
+	if err != nil {
+		return nil, fmt.Errorf("loading CR10A URDF kinematics from %q: %w", path, err)
+	}
+	return model, nil
 }

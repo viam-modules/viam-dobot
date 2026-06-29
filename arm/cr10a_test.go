@@ -194,6 +194,29 @@ func TestParseDashResp(t *testing.T) {
 	}
 }
 
+// TestURDFParse loads the URDF directly (relative path works because go test
+// sets the working directory to the package directory) and verifies it produces
+// a valid 6-DoF model whose home pose is finite.
+func TestURDFParse(t *testing.T) {
+	model, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatalf("ParseModelXMLFile: %v", err)
+	}
+	if got := len(model.DoF()); got != 6 {
+		t.Fatalf("expected 6 DoF, got %d", got)
+	}
+	zero := make([]referenceframe.Input, 6)
+	pose, err := model.Transform(zero)
+	if err != nil {
+		t.Fatalf("Transform(zero): %v", err)
+	}
+	pt := pose.Point()
+	if math.IsNaN(pt.X) || math.IsNaN(pt.Y) || math.IsNaN(pt.Z) ||
+		math.IsInf(pt.X, 0) || math.IsInf(pt.Y, 0) || math.IsInf(pt.Z, 0) {
+		t.Fatalf("non-finite home pose %v", pt)
+	}
+}
+
 // TestConfigValidateMeshDecimationRatios checks that out-of-range ratios are
 // rejected and valid ratios (including the boundary values 0 and 1) are accepted.
 func TestConfigValidateMeshDecimationRatios(t *testing.T) {
