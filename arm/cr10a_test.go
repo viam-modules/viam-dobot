@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/spatialmath"
 	rdkutils "go.viam.com/rdk/utils"
 )
 
@@ -260,6 +261,55 @@ func TestConfigValidateMeshDecimationRatios(t *testing.T) {
 	negative := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{-0.1}}
 	if _, _, err := negative.Validate("path"); err == nil {
 		t.Fatalf("expected error for negative ratio, got nil")
+	}
+}
+
+// TestJSONURDFForwardKinematicsAgree samples several joint configurations and
+// asserts that the embedded JSON kinematics model and the URDF kinematics model
+// produce tool poses that agree within a loose tolerance. A large deviation
+// signals that the two independently-authored models disagree on the tool frame,
+// which would cause a silent TCP jump when toggling use_urdf.
+func TestJSONURDFForwardKinematicsAgree(t *testing.T) {
+	jsonModel, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, "cr10a")
+	if err != nil {
+		t.Fatalf("UnmarshalModelJSON: %v", err)
+	}
+	urdfModel, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatalf("ParseModelXMLFile: %v", err)
+	}
+
+	// Representative joint configs (radians).
+	configs := [][]referenceframe.Input{
+		{0, 0, 0, 0, 0, 0},
+		{0.5, -0.3, 0.7, 0.2, -0.4, 0.1},
+		{-1.2, 0.6, -0.9, 1.0, 0.3, -0.7},
+	}
+	const posTolMM = 10.0 // loose: analytic links vs mesh origins
+	const oriTolDeg = 2.0
+
+	for _, c := range configs {
+		jp, err := jsonModel.Transform(c)
+		if err != nil {
+			t.Fatalf("json Transform %v: %v", c, err)
+		}
+		up, err := urdfModel.Transform(c)
+		if err != nil {
+			t.Fatalf("urdf Transform %v: %v", c, err)
+		}
+
+		dist := jp.Point().Sub(up.Point()).Norm()
+		oriDiff := spatialmath.QuatToR3AA(
+			spatialmath.OrientationBetween(jp.Orientation(), up.Orientation()).Quaternion(),
+		).Norm() * 180 / math.Pi
+
+		t.Logf("config %v: posΔ=%.2fmm oriΔ=%.2f°", c, dist, oriDiff)
+		if dist > posTolMM {
+			t.Errorf("config %v: position diff %.2fmm exceeds %.1fmm", c, dist, posTolMM)
+		}
+		if oriDiff > oriTolDeg {
+			t.Errorf("config %v: orientation diff %.2f° exceeds %.1f°", c, oriDiff, oriTolDeg)
+		}
 	}
 }
 
