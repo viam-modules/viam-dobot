@@ -107,9 +107,13 @@ Viam app 3D view. Motion commands are unaffected: Cartesian still delegates to
 
 ## Known risks / follow-ups
 
-- The JSON and URDF were authored independently; the FK-equivalence test is the
-  guard. Reconcile the URDF to be physically correct as the future source of
-  truth.
+- **FK equivalence verified in software.** `TestJSONURDFForwardKinematicsAgree`
+  passes: the JSON and URDF models agree to ~4 µm / ~5×10⁻⁴ ° across sampled
+  joint configs, indicating the JSON SVA params were derived from the same URDF
+  source rather than independently authored. The gross-frame-error risk this test
+  was designed to catch is not present. The remaining risk is hardware: a bring-up
+  check against the real CR10A is still needed before flipping the default to
+  `use_urdf: true`.
 - The URDF's `±6.27 rad` joint limits are wider than physically safe and wider
   than the JSON; tighten to the real CR10A limits during reconciliation.
 - URDF collision geometry is full meshes → slower planning than the capsules;

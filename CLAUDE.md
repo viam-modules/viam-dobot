@@ -49,7 +49,7 @@ The `arm/` package is split into three files that correspond to the three concer
 
 - **`Reconfigure` tears down and replaces both TCP clients.** It is the single source of truth for connection state — the constructor just calls it. After replacing clients, it does best-effort startup (`ClearError`, `SpeedFactor`, `VelJ`, `AccJ`, optionally `EnableRobot`) and waits up to 3 s for the first feedback frame so subsequent calls don't race.
 
-- **Kinematics JSON is embedded, not loaded from disk.** `//go:embed cr10a_kinematics.json` baked into the binary; `Reconfigure` `UnmarshalModelJSON`s a fresh model on every call (cheap, and means a tool change requires a rebuild, not a config swap).
+- **Kinematics has two sources.** The default is the embedded capsule JSON (`cr10a_kinematics.json`, `//go:embed`-baked into the binary; `Reconfigure` calls `UnmarshalModelJSON` on every call). When `use_urdf: true` is set, `makeModelFrame` instead calls `referenceframe.ParseModelXMLFile` on `$VIAM_MODULE_ROOT/arm/cr10a.urdf`, passing `mesh_decimation_ratios` (7 ratios, one per collision mesh in document order — `base_link` then `Link1`–`Link6` — defaulting to 0.1 each). `make module` bundles `arm/cr10a.urdf` + `arm/meshes/` into the tarball so the meshes are available on the target host. `TestJSONURDFForwardKinematicsAgree` guards that both models produce the same tool pose (verified to agree within ~4 µm / ~5×10⁻⁴ °). The URDF's `dummy_joint` carries an explicit zero `<origin>` as a workaround for an RDK v0.123.0 URDF-parser nil-deref; do not remove it on re-import. The embedded JSON path remains the default until the URDF is confirmed on hardware.
 
 ### DoCommand is the escape hatch
 

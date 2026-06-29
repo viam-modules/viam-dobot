@@ -48,6 +48,8 @@ Example attributes configuration:
 | `joint_speed`    | int  | 50    | Per-`MovJ` `VelJ` percent. |
 | `joint_accel`    | int  | 50    | Per-`MovJ` `AccJ` percent. |
 | `auto_enable`    | bool | true  | Issue `EnableRobot()` at module start. |
+| `use_urdf`       | bool | false | When `true`, loads kinematics and visual/collision meshes from the bundled `arm/cr10a.urdf` instead of the default embedded capsule-geometry JSON. Gives a richer 3D visualization in the Viam app and mesh-accurate collision geometry for motion planning, at the cost of slower planning. Requires `VIAM_MODULE_ROOT` to be set (automatic when run via `viam-server`). Default remains `false` until the URDF is validated on hardware. |
+| `mesh_decimation_ratios` | array of numbers | `[0.1, …]` (7 entries) | Per-collision-mesh simplification ratio in `[0, 1]`, in URDF document order (`base_link` followed by `Link1`–`Link6`). Lower values = more aggressive simplification = faster planning, coarser geometry. Only used when `use_urdf` is `true`. Omit to accept the default 0.1 for all 7 meshes. |
 
 ### DoCommand actions
 
