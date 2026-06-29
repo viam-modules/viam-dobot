@@ -217,6 +217,35 @@ func TestURDFParse(t *testing.T) {
 	}
 }
 
+// TestMakeModelFrameURDF exercises makeModelFrame's URDF branch end to end,
+// including the per-mesh decimation-ratio default. This is the test that would
+// have caught a mesh-count mismatch (one ratio per joint vs. per collision
+// mesh). go test runs with CWD = the package dir (arm/), and makeModelFrame
+// joins VIAM_MODULE_ROOT + "arm" + "cr10a.urdf", so ".." resolves to the repo
+// root and the path lands back on ../arm/cr10a.urdf.
+func TestMakeModelFrameURDF(t *testing.T) {
+	t.Setenv("VIAM_MODULE_ROOT", "..")
+	model, err := makeModelFrame(&Config{Host: "x", UseURDF: true}, "cr10a")
+	if err != nil {
+		t.Fatalf("makeModelFrame URDF: %v", err)
+	}
+	if got := len(model.DoF()); got != 6 {
+		t.Fatalf("expected 6 DoF, got %d", got)
+	}
+}
+
+// TestMakeModelFrameJSON confirms the default (no use_urdf) branch still yields
+// the embedded 6-DoF capsule model.
+func TestMakeModelFrameJSON(t *testing.T) {
+	model, err := makeModelFrame(&Config{Host: "x"}, "cr10a")
+	if err != nil {
+		t.Fatalf("makeModelFrame JSON: %v", err)
+	}
+	if got := len(model.DoF()); got != 6 {
+		t.Fatalf("expected 6 DoF, got %d", got)
+	}
+}
+
 // TestConfigValidateMeshDecimationRatios checks that out-of-range ratios are
 // rejected and valid ratios (including the boundary values 0 and 1) are accepted.
 func TestConfigValidateMeshDecimationRatios(t *testing.T) {

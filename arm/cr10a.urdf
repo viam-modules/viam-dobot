@@ -48,6 +48,7 @@
      <joint name="dummy_joint" type="fixed">
       <parent link="dummy_link" />
       <child  link="base_link" />
+      <!-- explicit zero origin: RDK v0.123.0 URDF parser nil-derefs Origin.RPY on fixed joints lacking <origin> -->
       <origin xyz="0 0 0" rpy="0 0 0" />
     </joint>
   <link

@@ -97,9 +97,12 @@ type Config struct {
 	// hardware-validated. Requires VIAM_MODULE_ROOT to be set (it is, under
 	// viam-server).
 	UseURDF bool `json:"use_urdf,omitempty"`
-	// MeshDecimationRatios is the per-joint mesh simplification ratio in [0,1]
-	// used when UseURDF is set. Lower = more aggressive. Defaults to 0.1 per
-	// joint when empty. Ignored unless UseURDF is true.
+	// MeshDecimationRatios is the per-collision-mesh simplification ratio in
+	// [0,1] used when UseURDF is set. The RDK URDF parser applies these to
+	// collision meshes in URDF document order — for the CR10A that's base_link
+	// followed by the 6 link meshes (7 total), not one per joint. Lower = more
+	// aggressive. Defaults to 0.1 for each of the 7 meshes when empty. Ignored
+	// unless UseURDF is true.
 	MeshDecimationRatios []float64 `json:"mesh_decimation_ratios,omitempty"`
 }
 
@@ -627,6 +630,15 @@ func orDefault[T int](v, def T) T {
 	return v
 }
 
+// cr10a.urdf has 7 collision meshes: base_link + Link1..Link6. The RDK URDF
+// parser assigns mesh_decimation_ratios per collision mesh in document order
+// (base_link is index 0), so we need one ratio per mesh, not one per joint —
+// a 6-element default would leave the heaviest wrist mesh (Link6) undecimated.
+const (
+	numCR10ACollisionMeshes = 7
+	defaultMeshDecimation   = 0.1
+)
+
 // makeModelFrame builds the kinematic model from either the embedded capsule
 // JSON (default) or the bundled URDF + meshes (when conf.UseURDF). The URDF
 // path is resolved against VIAM_MODULE_ROOT, which viam-server sets to the
@@ -637,12 +649,19 @@ func makeModelFrame(conf *Config, name string) (referenceframe.Model, error) {
 	}
 	ratios := conf.MeshDecimationRatios
 	if len(ratios) == 0 {
-		ratios = []float64{0.1, 0.1, 0.1, 0.1, 0.1, 0.1}
+		ratios = make([]float64, numCR10ACollisionMeshes)
+		for i := range ratios {
+			ratios[i] = defaultMeshDecimation
+		}
 	}
-	path := filepath.Join(os.Getenv("VIAM_MODULE_ROOT"), "arm", "cr10a.urdf")
+	root := os.Getenv("VIAM_MODULE_ROOT")
+	if root == "" {
+		return nil, errors.New("use_urdf is set but VIAM_MODULE_ROOT is empty")
+	}
+	path := filepath.Join(root, "arm", "cr10a.urdf")
 	model, err := referenceframe.ParseModelXMLFile(path, name, ratios)
 	if err != nil {
-		return nil, fmt.Errorf("loading CR10A URDF kinematics from %q: %w", path, err)
+		return nil, fmt.Errorf("parsing URDF %q: %w", path, err)
 	}
 	return model, nil
 }
