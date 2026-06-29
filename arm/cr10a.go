@@ -100,9 +100,11 @@ type Config struct {
 	// MeshDecimationRatios is the per-collision-mesh simplification ratio in
 	// [0,1] used when UseURDF is set. The RDK URDF parser applies these to
 	// collision meshes in URDF document order — for the CR10A that's base_link
-	// followed by the 6 link meshes (7 total), not one per joint. Lower = more
-	// aggressive. Defaults to 0.1 for each of the 7 meshes when empty. Ignored
-	// unless UseURDF is true.
+	// followed by the 6 link meshes (7 total), not one per joint. Only ratios
+	// strictly in (0,1) actually decimate a mesh; a value of 0 or 1 leaves that
+	// mesh at full resolution. Lower = more aggressive within (0,1). If fewer
+	// than 7 ratios are supplied, trailing meshes are left undecimated. Defaults
+	// to 0.1 for each of the 7 meshes when empty. Ignored unless UseURDF is true.
 	MeshDecimationRatios []float64 `json:"mesh_decimation_ratios,omitempty"`
 }
 
@@ -310,9 +312,11 @@ func (a *cr10a) Geometries(ctx context.Context, _ map[string]interface{}) ([]spa
 }
 
 func (a *cr10a) Get3DModels(_ context.Context, _ map[string]interface{}) (map[string]*commonpb.Mesh, error) {
-	// We don't ship STL meshes; collision geometry is the cylinders in the
-	// kinematics JSON. Returning an empty map is the convention for arm
-	// modules that have no 3D mesh assets.
+	// Mesh and visual geometry are surfaced through the kinematic model —
+	// Kinematics() and Geometries() carry the link geometry (capsules when
+	// use_urdf is false, URDF meshes when true). This method returns an empty
+	// map, which is the arm convention when 3D mesh assets are not published
+	// separately from the kinematic model.
 	return map[string]*commonpb.Mesh{}, nil
 }
 
