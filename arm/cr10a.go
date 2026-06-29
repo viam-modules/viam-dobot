@@ -90,6 +90,15 @@ type Config struct {
 	JointAccel int `json:"joint_accel,omitempty"`
 	// AutoEnable enables servos at module start; default true.
 	AutoEnable *bool `json:"auto_enable,omitempty"`
+	// UseURDF loads kinematics + meshes from arm/cr10a.urdf instead of the
+	// embedded capsule JSON. Default false (embedded JSON) until the URDF is
+	// hardware-validated. Requires VIAM_MODULE_ROOT to be set (it is, under
+	// viam-server).
+	UseURDF bool `json:"use_urdf,omitempty"`
+	// MeshDecimationRatios is the per-joint mesh simplification ratio in [0,1]
+	// used when UseURDF is set. Lower = more aggressive. Defaults to 0.1 per
+	// joint when empty. Ignored unless UseURDF is true.
+	MeshDecimationRatios []float64 `json:"mesh_decimation_ratios,omitempty"`
 }
 
 // Validate satisfies resource.ConfigValidator.
@@ -104,6 +113,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	} {
 		if v < 0 || v > 100 {
 			return nil, nil, fmt.Errorf("%s must be between 1 and 100, got %d", name, v)
+		}
+	}
+	for i, r := range cfg.MeshDecimationRatios {
+		if r < 0 || r > 1 {
+			return nil, nil, fmt.Errorf("mesh_decimation_ratios[%d] must be in [0, 1], got %f", i, r)
 		}
 	}
 	return nil, nil, nil

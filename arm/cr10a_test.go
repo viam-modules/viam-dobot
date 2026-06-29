@@ -194,6 +194,19 @@ func TestParseDashResp(t *testing.T) {
 	}
 }
 
+// TestConfigValidateMeshDecimationRatios checks that out-of-range ratios are
+// rejected and valid ratios (including the boundary values 0 and 1) are accepted.
+func TestConfigValidateMeshDecimationRatios(t *testing.T) {
+	good := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{0, 0.5, 1}}
+	if _, _, err := good.Validate("path"); err != nil {
+		t.Fatalf("valid ratios rejected: %v", err)
+	}
+	bad := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{1.5}}
+	if _, _, err := bad.Validate("path"); err == nil {
+		t.Fatalf("expected error for out-of-range ratio, got nil")
+	}
+}
+
 // TestParseDragSensitivityArgs covers the set_drag_sensitivity arg parsing:
 // required value (1..90), optional index (default 0, else 0..6), float64→int
 // truncation, and — critically — that the index-out-of-range failure returns a
