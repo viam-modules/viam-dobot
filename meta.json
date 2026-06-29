@@ -1,21 +1,25 @@
 {
   "$schema": "https://dl.viam.dev/module.schema.json",
-  "module_id": "viam-soleng:dobot",
+  "module_id": "viam:dobot",
   "visibility": "public",
-  "url": "https://github.com/viam-soleng/viam-dobot-cr10a",
-  "description": "Viam arm module for the Dobot CR10A 6-axis collaborative robot.",
+  "url": "https://github.com/viam-modules/viam-dobot",
+  "description": "Viam arm module for the Dobot 6-axis collaborative robot arms.",
   "models": [
     {
       "api": "rdk:component:arm",
-      "model": "viam-soleng:dobot:cr10a",
+      "model": "viam:dobot:cr10a",
       "markdown_link": "README.md#configure",
       "short_description": "Driver for the Dobot CR10A using the CR-series TCP/IP remote-control protocol."
     }
   ],
   "build": {
     "build": "make module",
-    "arch":  ["linux/amd64", "linux/arm64", "darwin/arm64"],
-    "path":  "bin/module.tar.gz"
+    "arch": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/arm64"
+    ],
+    "path": "bin/module.tar.gz"
   },
   "entrypoint": "bin/viam-cr10a"
 }

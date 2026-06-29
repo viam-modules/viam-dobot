@@ -6,7 +6,7 @@
 package main
 
 import (
-	dobot "github.com/viam-soleng/viam-dobot-cr10a/arm"
+	dobot "github.com/viam-modules/viam-dobot/arm"
 
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/module"

@@ -1,4 +1,4 @@
-module github.com/viam-soleng/viam-dobot-cr10a
+module github.com/viam-modules/viam-dobot
 
 go 1.25.1
 

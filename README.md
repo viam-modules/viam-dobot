@@ -27,21 +27,15 @@ Registered model: `viam-soleng:dobot:cr10a`.
 
 ## Configure
 
-Add to the `services` / `components` section of your robot config:
+Example attributes configuration:
 
 ```json
 {
-  "name": "cr10a",
-  "model": "viam-soleng:dobot:cr10a",
-  "type": "arm",
-  "namespace": "rdk",
-  "attributes": {
-    "host": "192.168.1.6",
-    "speed_factor": 30,
-    "joint_speed":  50,
-    "joint_accel":  50,
-    "auto_enable":  true
-  }
+  "host": "192.168.1.6",
+  "speed_factor": 30,
+  "joint_speed":  50,
+  "joint_accel":  50,
+  "auto_enable":  true
 }
 ```
 
@@ -55,7 +49,7 @@ Add to the `services` / `components` section of your robot config:
 | `joint_accel`    | int  | 50    | Per-`MovJ` `AccJ` percent. |
 | `auto_enable`    | bool | true  | Issue `EnableRobot()` at module start. |
 
-## DoCommand actions
+### DoCommand actions
 
 The arm.Arm interface doesn't expose Dobot-specific actions, so they're
 available via `DoCommand`:

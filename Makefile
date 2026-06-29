@@ -3,14 +3,15 @@
 BIN     = bin/viam-cr10a
 TARBALL = bin/module.tar.gz
 
+GO_BUILD_ENV :=
 GOFLAGS = -trimpath
 LDFLAGS = -s -w
 
 all: $(BIN)
 
-$(BIN):
+$(BIN): Makefile main.go arm/*.go arm/*.json
 	mkdir -p bin
-	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN) .
+	 GOOS=$(VIAM_BUILD_OS) GOARCH=$(VIAM_BUILD_ARCH) $(GO_BUILD_ENV) go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN) .
 
 module: $(BIN)
 	tar -czf $(TARBALL) $(BIN) meta.json
