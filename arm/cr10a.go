@@ -116,7 +116,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 	for i, r := range cfg.MeshDecimationRatios {
-		if r < 0 || r > 1 {
+		if math.IsNaN(r) || r < 0 || r > 1 {
 			return nil, nil, fmt.Errorf("mesh_decimation_ratios[%d] must be in [0, 1], got %f", i, r)
 		}
 	}

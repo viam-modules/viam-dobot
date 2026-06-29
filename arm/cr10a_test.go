@@ -205,6 +205,10 @@ func TestConfigValidateMeshDecimationRatios(t *testing.T) {
 	if _, _, err := bad.Validate("path"); err == nil {
 		t.Fatalf("expected error for out-of-range ratio, got nil")
 	}
+	negative := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{-0.1}}
+	if _, _, err := negative.Validate("path"); err == nil {
+		t.Fatalf("expected error for negative ratio, got nil")
+	}
 }
 
 // TestParseDragSensitivityArgs covers the set_drag_sensitivity arg parsing:
