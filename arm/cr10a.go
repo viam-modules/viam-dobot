@@ -38,7 +38,7 @@ import (
 //
 // Update the namespace if you fork this module under a different organization;
 // the wire model string is `<namespace>:dobot:cr10a`.
-var Model = resource.ModelNamespace("viam-soleng").WithFamily("dobot").WithModel("cr10a")
+var Model = resource.ModelNamespace("viam").WithFamily("dobot").WithModel("cr10a")
 
 //go:embed cr10a_kinematics.json
 var cr10aKinematicsJSON []byte
@@ -136,6 +136,23 @@ func init() {
 	})
 }
 
+// cr10aMeshSTLFiles are the bundled link meshes in kinematic order.
+var cr10aMeshSTLFiles = []string{
+	"base_link.STL", "Link1.STL", "Link2.STL", "Link3.STL", "Link4.STL", "Link5.STL", "Link6.STL",
+}
+
+// cr10aJSONFrameNames and cr10aURDFFrameNames are the active model's frame
+// names for each mesh in cr10aMeshSTLFiles, in the same order. The meshes are
+// authored in the URDF link frames; the JSON (UR-derived) link frames coincide
+// with them (verified by TestPerLinkFrameAlignment), so keying by either is
+// correct.
+var cr10aJSONFrameNames = []string{
+	"base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "ee_link",
+}
+var cr10aURDFFrameNames = []string{
+	"base_link", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6",
+}
+
 // cr10a is the live arm.Arm implementation.
 type cr10a struct {
 	resource.Named
@@ -147,9 +164,12 @@ type cr10a struct {
 	feedback *feedbackClient
 	model    referenceframe.Model
 
-	speedFactor int
-	jointSpeed  int
-	jointAccel  int
+	speedFactor   int
+	jointSpeed    int
+	jointAccel    int
+	meshPartNames []string                  // active frame-name slice for Get3DModels
+	meshCache     map[string]*commonpb.Mesh // lazily built; nil means not yet built
+	meshCacheKey  string                    // first element of meshPartNames at cache-build time
 }
 
 func newCR10A(
@@ -192,6 +212,12 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 		autoEnable = *newConf.AutoEnable
 	}
 
+	// Determine which frame-name set to use for mesh keying.
+	meshPartNames := cr10aJSONFrameNames
+	if newConf.UseURDF {
+		meshPartNames = cr10aURDFFrameNames
+	}
+
 	a.mu.Lock()
 	// tear down old clients if any
 	if a.dash != nil {
@@ -207,6 +233,11 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 	a.speedFactor = speedFactor
 	a.jointSpeed = jointSpeed
 	a.jointAccel = jointAccel
+	a.meshPartNames = meshPartNames
+	// Invalidate the mesh cache whenever we reconfigure (the active name set may
+	// have changed if use_urdf was toggled).
+	a.meshCache = nil
+	a.meshCacheKey = ""
 	a.mu.Unlock()
 
 	// start feedback reader (it survives Reconfigure because we just reassigned)
@@ -311,13 +342,71 @@ func (a *cr10a) Geometries(ctx context.Context, _ map[string]interface{}) ([]spa
 	return gif.Geometries(), nil
 }
 
+// Get3DModels returns the bundled link meshes (base_link + Link1..Link6) as
+// PLY, keyed by the active kinematic model's frame names. The active name set
+// is cr10aJSONFrameNames when use_urdf is false and cr10aURDFFrameNames when
+// use_urdf is true. The frames coincide geometrically (verified by
+// TestPerLinkFrameAlignment), so the same seven STL files serve both models.
+//
+// If VIAM_MODULE_ROOT is unset the method logs a warning and returns an empty
+// map with a nil error — meshes are simply unavailable in that environment
+// (unit tests, developer workstations) and 3D visualisation should degrade
+// gracefully. A per-file read/parse failure returns a wrapped error.
+//
+// Results are cached on the struct and invalidated by Reconfigure.
 func (a *cr10a) Get3DModels(_ context.Context, _ map[string]interface{}) (map[string]*commonpb.Mesh, error) {
-	// Mesh and visual geometry are surfaced through the kinematic model —
-	// Kinematics() and Geometries() carry the link geometry (capsules when
-	// use_urdf is false, URDF meshes when true). This method returns an empty
-	// map, which is the arm convention when 3D mesh assets are not published
-	// separately from the kinematic model.
-	return map[string]*commonpb.Mesh{}, nil
+	root := os.Getenv("VIAM_MODULE_ROOT")
+	if root == "" {
+		a.logger.Warn("Get3DModels: VIAM_MODULE_ROOT is not set; returning empty mesh map")
+		return map[string]*commonpb.Mesh{}, nil
+	}
+
+	a.mu.RLock()
+	names := a.meshPartNames
+	cacheKey := a.meshCacheKey
+	cached := a.meshCache
+	a.mu.RUnlock()
+
+	// Use cache key = first element of the active name slice (base_link is
+	// stable, so this distinguishes JSON vs URDF name sets cheaply).
+	activeKey := ""
+	if len(names) > 0 {
+		activeKey = names[0]
+	}
+	if cached != nil && cacheKey == activeKey {
+		return cached, nil
+	}
+
+	built, err := buildMeshMap(root, names)
+	if err != nil {
+		return nil, err
+	}
+
+	a.mu.Lock()
+	a.meshCache = built
+	a.meshCacheKey = activeKey
+	a.mu.Unlock()
+
+	return built, nil
+}
+
+// buildMeshMap reads each STL under moduleRoot/arm/meshes/cr10/, converts it
+// to PLY via TrianglesToPLYBytes, and keys the result by the matching entry in
+// names. names and cr10aMeshSTLFiles must be the same length.
+func buildMeshMap(moduleRoot string, names []string) (map[string]*commonpb.Mesh, error) {
+	out := make(map[string]*commonpb.Mesh, len(cr10aMeshSTLFiles))
+	for i, stlFile := range cr10aMeshSTLFiles {
+		path := filepath.Join(moduleRoot, "arm", "meshes", "cr10", stlFile)
+		mesh, err := spatialmath.NewMeshFromSTLFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("loading mesh %q: %w", path, err)
+		}
+		out[names[i]] = &commonpb.Mesh{
+			ContentType: "ply",
+			Mesh:        mesh.TrianglesToPLYBytes(false),
+		}
+	}
+	return out, nil
 }
 
 // ---------- arm.Arm: motion ----------

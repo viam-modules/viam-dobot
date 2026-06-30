@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 	rdkutils "go.viam.com/rdk/utils"
@@ -409,5 +410,147 @@ func TestParseDragSensitivityArgs(t *testing.T) {
 	_, _, idxErr := parseDragSensitivityArgs(map[string]interface{}{"value": float64(50), "index": float64(9)})
 	if valErr == nil || idxErr == nil || valErr.Error() == idxErr.Error() {
 		t.Fatalf("value error %v and index error %v must be non-nil and distinct", valErr, idxErr)
+	}
+}
+
+// cr10aWorldPosesZero reconstructs world-frame poses for every link and joint
+// frame in cfg, evaluated at all-zero inputs (home position). Results are keyed
+// by frame ID and memoized for efficiency.
+func cr10aWorldPosesZero(t *testing.T, cfg *referenceframe.ModelConfigJSON) map[string]spatialmath.Pose {
+	t.Helper()
+	transforms := map[string]referenceframe.Frame{}
+	parent := map[string]string{}
+	for i := range cfg.Links {
+		l := &cfg.Links[i]
+		lif, err := l.ParseConfig()
+		if err != nil {
+			t.Fatalf("link %s ParseConfig: %v", l.ID, err)
+		}
+		f, err := lif.ToStaticFrame(l.ID)
+		if err != nil {
+			t.Fatalf("link %s ToStaticFrame: %v", l.ID, err)
+		}
+		transforms[l.ID] = f
+		parent[l.ID] = l.Parent
+	}
+	for i := range cfg.Joints {
+		j := &cfg.Joints[i]
+		f, err := j.ToFrame()
+		if err != nil {
+			t.Fatalf("joint %s ToFrame: %v", j.ID, err)
+		}
+		transforms[j.ID] = f
+		parent[j.ID] = j.Parent
+	}
+	memo := map[string]spatialmath.Pose{}
+	var world func(name string) spatialmath.Pose
+	world = func(name string) spatialmath.Pose {
+		if name == "" || name == referenceframe.World {
+			return spatialmath.NewZeroPose()
+		}
+		if p, ok := memo[name]; ok {
+			return p
+		}
+		fr, ok := transforms[name]
+		if !ok {
+			t.Fatalf("frame %q not found", name)
+		}
+		var in []referenceframe.Input
+		if d := len(fr.DoF()); d > 0 {
+			in = make([]referenceframe.Input, d)
+		}
+		local, err := fr.Transform(in)
+		if err != nil {
+			t.Fatalf("frame %s Transform: %v", name, err)
+		}
+		res := spatialmath.Compose(world(parent[name]), local)
+		memo[name] = res
+		return res
+	}
+	for name := range transforms {
+		world(name)
+	}
+	return memo
+}
+
+// TestPerLinkFrameAlignment verifies that the JSON (UR-derived) and URDF link
+// frames coincide at home position to within 1 mm / 1°. This is the guard that
+// makes it safe to key the bundled STL meshes by either model's frame names —
+// if the frames ever drift, this test fails before Get3DModels silently
+// misregisters a mesh.
+func TestPerLinkFrameAlignment(t *testing.T) {
+	jsonModel, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, "cr10a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	urdfModel, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jp := cr10aWorldPosesZero(t, jsonModel.ModelConfig())
+	up := cr10aWorldPosesZero(t, urdfModel.ModelConfig())
+
+	pairs := [][2]string{
+		{"base_link", "base_link"},
+		{"shoulder_link", "Link1"},
+		{"upper_arm_link", "Link2"},
+		{"forearm_link", "Link3"},
+		{"wrist_1_link", "Link4"},
+		{"wrist_2_link", "Link5"},
+		{"ee_link", "Link6"},
+	}
+	const posTolMM = 1.0
+	const oriTolDeg = 1.0
+	for _, pr := range pairs {
+		j, ok1 := jp[pr[0]]
+		u, ok2 := up[pr[1]]
+		if !ok1 || !ok2 {
+			t.Fatalf("missing pose json[%s]=%v urdf[%s]=%v", pr[0], ok1, pr[1], ok2)
+		}
+		posD := j.Point().Sub(u.Point()).Norm()
+		oriD := spatialmath.QuatToR3AA(
+			spatialmath.OrientationBetween(j.Orientation(), u.Orientation()).Quaternion(),
+		).Norm() * 180 / math.Pi
+		t.Logf("%s<->%s posΔ=%.4fmm oriΔ=%.4f°", pr[0], pr[1], posD, oriD)
+		if posD > posTolMM {
+			t.Errorf("%s<->%s position diff %.4fmm exceeds %.1fmm", pr[0], pr[1], posD, posTolMM)
+		}
+		if oriD > oriTolDeg {
+			t.Errorf("%s<->%s orientation diff %.4f° exceeds %.1f°", pr[0], pr[1], oriD, oriTolDeg)
+		}
+	}
+}
+
+// TestGet3DModelsReturnsMeshes exercises Get3DModels by pointing VIAM_MODULE_ROOT
+// at the repo root (go test runs with CWD = arm/, so ".." resolves there) and
+// asserting that 7 PLY entries are returned, one per JSON frame name.
+func TestGet3DModelsReturnsMeshes(t *testing.T) {
+	t.Setenv("VIAM_MODULE_ROOT", "..")
+
+	a := &cr10a{
+		logger:        logging.NewTestLogger(t),
+		meshPartNames: cr10aJSONFrameNames,
+	}
+
+	ctx := t.Context()
+	meshes, err := a.Get3DModels(ctx, nil)
+	if err != nil {
+		t.Fatalf("Get3DModels returned error: %v", err)
+	}
+	if len(meshes) != len(cr10aJSONFrameNames) {
+		t.Fatalf("expected %d meshes, got %d", len(cr10aJSONFrameNames), len(meshes))
+	}
+	for _, name := range cr10aJSONFrameNames {
+		m, ok := meshes[name]
+		if !ok {
+			t.Errorf("missing mesh for frame %q", name)
+			continue
+		}
+		if m.ContentType != "ply" {
+			t.Errorf("frame %q: expected ContentType \"ply\", got %q", name, m.ContentType)
+		}
+		if len(m.Mesh) == 0 {
+			t.Errorf("frame %q: Mesh bytes are empty", name)
+		}
 	}
 }
