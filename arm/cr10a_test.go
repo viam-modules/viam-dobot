@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	commonpb "go.viam.com/api/common/v1"
+
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
@@ -521,36 +523,65 @@ func TestPerLinkFrameAlignment(t *testing.T) {
 	}
 }
 
-// TestGet3DModelsReturnsMeshes exercises Get3DModels by pointing VIAM_MODULE_ROOT
-// at the repo root (go test runs with CWD = arm/, so ".." resolves there) and
-// asserting that 7 PLY entries are returned, one per JSON frame name.
+// TestGet3DModelsReturnsMeshes exercises Get3DModels in both kinematics modes by
+// pointing VIAM_MODULE_ROOT at the repo root (go test runs with CWD = arm/, so
+// ".." resolves there). Each case asserts 7 PLY entries keyed by the mode's
+// frame names, with non-empty mesh bytes.
 func TestGet3DModelsReturnsMeshes(t *testing.T) {
 	t.Setenv("VIAM_MODULE_ROOT", "..")
 
-	a := &cr10a{
-		logger:        logging.NewTestLogger(t),
-		meshPartNames: cr10aJSONFrameNames,
+	cases := []struct {
+		name      string
+		useURDF   bool
+		wantNames []string
+	}{
+		{
+			name:      "json frame names (use_urdf false)",
+			useURDF:   false,
+			wantNames: []string{"base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "ee_link"},
+		},
+		{
+			name:      "urdf frame names (use_urdf true)",
+			useURDF:   true,
+			wantNames: []string{"base_link", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6"},
+		},
 	}
 
-	ctx := t.Context()
-	meshes, err := a.Get3DModels(ctx, nil)
-	if err != nil {
-		t.Fatalf("Get3DModels returned error: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &cr10a{
+				logger:      logging.NewTestLogger(t),
+				meshUseURDF: tc.useURDF,
+			}
+
+			meshes, err := a.Get3DModels(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("Get3DModels returned error: %v", err)
+			}
+			if len(meshes) != len(tc.wantNames) {
+				t.Fatalf("expected %d meshes, got %d (keys %v)", len(tc.wantNames), len(meshes), keysOf(meshes))
+			}
+			for _, name := range tc.wantNames {
+				m, ok := meshes[name]
+				if !ok {
+					t.Errorf("missing mesh for frame %q", name)
+					continue
+				}
+				if m.ContentType != "ply" {
+					t.Errorf("frame %q: expected ContentType \"ply\", got %q", name, m.ContentType)
+				}
+				if len(m.Mesh) == 0 {
+					t.Errorf("frame %q: Mesh bytes are empty", name)
+				}
+			}
+		})
 	}
-	if len(meshes) != len(cr10aJSONFrameNames) {
-		t.Fatalf("expected %d meshes, got %d", len(cr10aJSONFrameNames), len(meshes))
+}
+
+func keysOf(m map[string]*commonpb.Mesh) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
-	for _, name := range cr10aJSONFrameNames {
-		m, ok := meshes[name]
-		if !ok {
-			t.Errorf("missing mesh for frame %q", name)
-			continue
-		}
-		if m.ContentType != "ply" {
-			t.Errorf("frame %q: expected ContentType \"ply\", got %q", name, m.ContentType)
-		}
-		if len(m.Mesh) == 0 {
-			t.Errorf("frame %q: Mesh bytes are empty", name)
-		}
-	}
+	return out
 }

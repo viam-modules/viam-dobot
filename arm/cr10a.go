@@ -19,7 +19,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -137,21 +136,19 @@ func init() {
 	})
 }
 
-// cr10aMeshSTLFiles are the bundled link meshes in kinematic order.
-var cr10aMeshSTLFiles = []string{
-	"base_link.STL", "Link1.STL", "Link2.STL", "Link3.STL", "Link4.STL", "Link5.STL", "Link6.STL",
-}
-
-// cr10aJSONFrameNames and cr10aURDFFrameNames are the active model's frame
-// names for each mesh in cr10aMeshSTLFiles, in the same order. The meshes are
-// authored in the URDF link frames; the JSON (UR-derived) link frames coincide
-// with them (verified by TestPerLinkFrameAlignment), so keying by either is
-// correct.
-var cr10aJSONFrameNames = []string{
-	"base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "ee_link",
-}
-var cr10aURDFFrameNames = []string{
-	"base_link", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6",
+// cr10aMeshParts lists each bundled link mesh with the frame name it maps to
+// under each kinematics source, in kinematic order. The STL is authored in the
+// URDF link frame; the JSON (UR-derived) frame coincides with it (guarded by
+// TestPerLinkFrameAlignment), so either name keys it correctly. This is the
+// single source of truth for the per-link (file, jsonName, urdfName) triple.
+var cr10aMeshParts = []struct{ stlFile, jsonName, urdfName string }{
+	{"base_link.STL", "base_link", "base_link"},
+	{"Link1.STL", "shoulder_link", "Link1"},
+	{"Link2.STL", "upper_arm_link", "Link2"},
+	{"Link3.STL", "forearm_link", "Link3"},
+	{"Link4.STL", "wrist_1_link", "Link4"},
+	{"Link5.STL", "wrist_2_link", "Link5"},
+	{"Link6.STL", "ee_link", "Link6"},
 }
 
 // cr10a is the live arm.Arm implementation.
@@ -165,12 +162,19 @@ type cr10a struct {
 	feedback *feedbackClient
 	model    referenceframe.Model
 
-	speedFactor   int
-	jointSpeed    int
-	jointAccel    int
-	meshPartNames []string                  // active frame-name slice for Get3DModels
-	meshCache     map[string]*commonpb.Mesh // lazily built; nil means not yet built
-	meshCacheKey  string                    // strings.Join(meshPartNames,",") at cache-build time
+	speedFactor int
+	jointSpeed  int
+	jointAccel  int
+
+	// meshUseURDF selects which frame-name set Get3DModels keys the bundled
+	// link meshes by: the URDF names when true, the JSON (UR-derived) names
+	// when false. Set in Reconfigure from the active config.
+	meshUseURDF bool
+	// meshCache holds the lazily-built PLY meshes; nil means not yet built.
+	meshCache map[string]*commonpb.Mesh
+	// meshCacheBuiltURDF records the meshUseURDF value the cache was built for,
+	// so a use_urdf toggle invalidates it on the next read.
+	meshCacheBuiltURDF bool
 }
 
 func newCR10A(
@@ -213,12 +217,6 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 		autoEnable = *newConf.AutoEnable
 	}
 
-	// Determine which frame-name set to use for mesh keying.
-	meshPartNames := cr10aJSONFrameNames
-	if newConf.UseURDF {
-		meshPartNames = cr10aURDFFrameNames
-	}
-
 	a.mu.Lock()
 	// tear down old clients if any
 	if a.dash != nil {
@@ -234,11 +232,11 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 	a.speedFactor = speedFactor
 	a.jointSpeed = jointSpeed
 	a.jointAccel = jointAccel
-	a.meshPartNames = meshPartNames
-	// Invalidate the mesh cache whenever we reconfigure (the active name set may
-	// have changed if use_urdf was toggled).
+	a.meshUseURDF = newConf.UseURDF
+	// Drop any cached meshes. Strictly the cache key (meshCacheBuiltURDF) already
+	// covers a use_urdf flip, but resetting here keeps reconfigure the single
+	// place that owns connection+derived state.
 	a.meshCache = nil
-	a.meshCacheKey = ""
 	a.mu.Unlock()
 
 	// start feedback reader (it survives Reconfigure because we just reassigned)
@@ -344,17 +342,19 @@ func (a *cr10a) Geometries(ctx context.Context, _ map[string]interface{}) ([]spa
 }
 
 // Get3DModels returns the bundled link meshes (base_link + Link1..Link6) as
-// PLY, keyed by the active kinematic model's frame names. The active name set
-// is cr10aJSONFrameNames when use_urdf is false and cr10aURDFFrameNames when
-// use_urdf is true. The frames coincide geometrically (verified by
-// TestPerLinkFrameAlignment), so the same seven STL files serve both models.
+// PLY, keyed by the active kinematic model's frame names — the URDF names when
+// use_urdf is true, the JSON (UR-derived) names when false. The frames coincide
+// geometrically (verified by TestPerLinkFrameAlignment), so the same seven STL
+// files serve both models.
 //
 // If VIAM_MODULE_ROOT is unset the method logs a warning and returns an empty
 // map with a nil error — meshes are simply unavailable in that environment
 // (unit tests, developer workstations) and 3D visualisation should degrade
 // gracefully. A per-file read/parse failure returns a wrapped error.
 //
-// Results are cached on the struct and invalidated by Reconfigure.
+// Results are cached on the struct, keyed by the active use_urdf mode, and
+// invalidated by Reconfigure. The returned map is a shallow copy so callers
+// can't mutate the cache.
 func (a *cr10a) Get3DModels(_ context.Context, _ map[string]interface{}) (map[string]*commonpb.Mesh, error) {
 	root := os.Getenv("VIAM_MODULE_ROOT")
 	if root == "" {
@@ -363,44 +363,55 @@ func (a *cr10a) Get3DModels(_ context.Context, _ map[string]interface{}) (map[st
 	}
 
 	a.mu.RLock()
-	names := a.meshPartNames
-	cacheKey := a.meshCacheKey
+	useURDF := a.meshUseURDF
 	cached := a.meshCache
+	cacheURDF := a.meshCacheBuiltURDF
 	a.mu.RUnlock()
 
-	// Key the cache on the full active name set so a use_urdf toggle (which
-	// swaps the slice but keeps base_link as the first element) actually
-	// invalidates a stale cache. The two slices differ from Link1 onward.
-	activeKey := strings.Join(names, ",")
-	if cached != nil && cacheKey == activeKey {
-		return cached, nil
+	if cached != nil && cacheURDF == useURDF {
+		return cloneMeshMap(cached), nil
 	}
 
-	built, err := buildMeshMap(root, names)
+	built, err := buildMeshMap(root, useURDF)
 	if err != nil {
 		return nil, err
 	}
 
 	a.mu.Lock()
 	a.meshCache = built
-	a.meshCacheKey = activeKey
+	a.meshCacheBuiltURDF = useURDF
 	a.mu.Unlock()
 
-	return built, nil
+	return cloneMeshMap(built), nil
 }
 
-// buildMeshMap reads each STL under moduleRoot/arm/meshes/cr10/, converts it
-// to PLY via TrianglesToPLYBytes, and keys the result by the matching entry in
-// names. names and cr10aMeshSTLFiles must be the same length.
-func buildMeshMap(moduleRoot string, names []string) (map[string]*commonpb.Mesh, error) {
-	out := make(map[string]*commonpb.Mesh, len(cr10aMeshSTLFiles))
-	for i, stlFile := range cr10aMeshSTLFiles {
-		path := filepath.Join(moduleRoot, "arm", "meshes", "cr10", stlFile)
+// cloneMeshMap returns a shallow copy of m (a fresh map sharing the same
+// *commonpb.Mesh values), so a caller mutating the returned map can't corrupt
+// the cached one.
+func cloneMeshMap(m map[string]*commonpb.Mesh) map[string]*commonpb.Mesh {
+	out := make(map[string]*commonpb.Mesh, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// buildMeshMap reads each STL under moduleRoot/arm/meshes/cr10/, converts it to
+// PLY via TrianglesToPLYBytes, and keys the result by the matching frame name
+// for the active mode (URDF names when useURDF, JSON names otherwise).
+func buildMeshMap(moduleRoot string, useURDF bool) (map[string]*commonpb.Mesh, error) {
+	out := make(map[string]*commonpb.Mesh, len(cr10aMeshParts))
+	for _, part := range cr10aMeshParts {
+		path := filepath.Join(moduleRoot, "arm", "meshes", "cr10", part.stlFile)
 		mesh, err := spatialmath.NewMeshFromSTLFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("loading mesh %q: %w", path, err)
 		}
-		out[names[i]] = &commonpb.Mesh{
+		name := part.jsonName
+		if useURDF {
+			name = part.urdfName
+		}
+		out[name] = &commonpb.Mesh{
 			ContentType: "ply",
 			Mesh:        mesh.TrianglesToPLYBytes(false),
 		}
