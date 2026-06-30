@@ -21,7 +21,7 @@ The build targets in `meta.json` are `linux/amd64`, `linux/arm64`, `darwin/arm64
 
 ## Architecture
 
-This is a Viam **arm component module**. `main.go` registers exactly one model — `viam-soleng:dobot:cr10a` — against `arm.API` and hands lifecycle to `module.ModularMain`. All real code lives in the `arm/` package.
+This is a Viam **arm component module**. `main.go` registers exactly one model — `viam:dobot:cr10a` — against `arm.API` and hands lifecycle to `module.ModularMain`. All real code lives in the `arm/` package.
 
 ### Three layers, three concerns
 
@@ -49,7 +49,9 @@ The `arm/` package is split into three files that correspond to the three concer
 
 - **`Reconfigure` tears down and replaces both TCP clients.** It is the single source of truth for connection state — the constructor just calls it. After replacing clients, it does best-effort startup (`ClearError`, `SpeedFactor`, `VelJ`, `AccJ`, optionally `EnableRobot`) and waits up to 3 s for the first feedback frame so subsequent calls don't race.
 
-- **Kinematics JSON is embedded, not loaded from disk.** `//go:embed cr10a_kinematics.json` baked into the binary; `Reconfigure` `UnmarshalModelJSON`s a fresh model on every call (cheap, and means a tool change requires a rebuild, not a config swap).
+- **Kinematics has two sources.** The default is the embedded capsule JSON (`cr10a_kinematics.json`, `//go:embed`-baked into the binary; `Reconfigure` calls `UnmarshalModelJSON` on every call). When `use_urdf: true` is set, `makeModelFrame` instead calls `referenceframe.ParseModelXMLFile` on `$VIAM_MODULE_ROOT/arm/cr10a.urdf`, passing `mesh_decimation_ratios` (7 ratios, one per collision mesh in document order — `base_link` then `Link1`–`Link6` — defaulting to 0.1 each). `make module` bundles `arm/cr10a.urdf` + `arm/meshes/` into the tarball so the meshes are available on the target host. `TestJSONURDFForwardKinematicsAgree` guards that both models produce the same tool pose (verified to agree within ~4 µm / ~5×10⁻⁴ °). The URDF's `dummy_joint` carries an explicit zero `<origin>` as a workaround for an RDK v0.123.0 URDF-parser nil-deref; do not remove it on re-import. The embedded JSON path remains the default until the URDF is confirmed on hardware.
+
+- **`Get3DModels` always serves the link meshes.** It reads the 7 bundled STLs from `$VIAM_MODULE_ROOT/arm/meshes/cr10/`, converts each to PLY (`spatialmath.NewMeshFromSTLFile` → `TrianglesToPLYBytes(false)`, `ContentType: "ply"`), and keys them by the active model's frame names — the UR-style JSON names (`shoulder_link`, …) when `use_urdf` is false, the URDF names (`Link1`…`Link6`) when true. This works in both modes because the JSON and URDF link frames coincide (`TestPerLinkFrameAlignment` guards it). `cr10aMeshParts` is the single source of truth for the per-link `(stlFile, jsonName, urdfName)` triple; the result is cached on the `cr10a` struct keyed by the active mode and invalidated by `Reconfigure`. With `VIAM_MODULE_ROOT` unset it warns and returns an empty map rather than failing.
 
 ### DoCommand is the escape hatch
 

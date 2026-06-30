@@ -7,7 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	commonpb "go.viam.com/api/common/v1"
+
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/spatialmath"
 	rdkutils "go.viam.com/rdk/utils"
 )
 
@@ -194,6 +198,124 @@ func TestParseDashResp(t *testing.T) {
 	}
 }
 
+// TestURDFParse loads the URDF directly (relative path works because go test
+// sets the working directory to the package directory) and verifies it produces
+// a valid 6-DoF model whose home pose is finite.
+func TestURDFParse(t *testing.T) {
+	model, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatalf("ParseModelXMLFile: %v", err)
+	}
+	if got := len(model.DoF()); got != 6 {
+		t.Fatalf("expected 6 DoF, got %d", got)
+	}
+	zero := make([]referenceframe.Input, 6)
+	pose, err := model.Transform(zero)
+	if err != nil {
+		t.Fatalf("Transform(zero): %v", err)
+	}
+	pt := pose.Point()
+	if math.IsNaN(pt.X) || math.IsNaN(pt.Y) || math.IsNaN(pt.Z) ||
+		math.IsInf(pt.X, 0) || math.IsInf(pt.Y, 0) || math.IsInf(pt.Z, 0) {
+		t.Fatalf("non-finite home pose %v", pt)
+	}
+}
+
+// TestMakeModelFrameURDF exercises makeModelFrame's URDF branch end to end,
+// including the per-mesh decimation-ratio default. This is the test that would
+// have caught a mesh-count mismatch (one ratio per joint vs. per collision
+// mesh). go test runs with CWD = the package dir (arm/), and makeModelFrame
+// joins VIAM_MODULE_ROOT + "arm" + "cr10a.urdf", so ".." resolves to the repo
+// root and the path lands back on ../arm/cr10a.urdf.
+func TestMakeModelFrameURDF(t *testing.T) {
+	t.Setenv("VIAM_MODULE_ROOT", "..")
+	model, err := makeModelFrame(&Config{Host: "x", UseURDF: true}, "cr10a")
+	if err != nil {
+		t.Fatalf("makeModelFrame URDF: %v", err)
+	}
+	if got := len(model.DoF()); got != 6 {
+		t.Fatalf("expected 6 DoF, got %d", got)
+	}
+}
+
+// TestMakeModelFrameJSON confirms the default (no use_urdf) branch still yields
+// the embedded 6-DoF capsule model.
+func TestMakeModelFrameJSON(t *testing.T) {
+	model, err := makeModelFrame(&Config{Host: "x"}, "cr10a")
+	if err != nil {
+		t.Fatalf("makeModelFrame JSON: %v", err)
+	}
+	if got := len(model.DoF()); got != 6 {
+		t.Fatalf("expected 6 DoF, got %d", got)
+	}
+}
+
+// TestConfigValidateMeshDecimationRatios checks that out-of-range ratios are
+// rejected and valid ratios (including the boundary values 0 and 1) are accepted.
+func TestConfigValidateMeshDecimationRatios(t *testing.T) {
+	good := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{0, 0.5, 1}}
+	if _, _, err := good.Validate("path"); err != nil {
+		t.Fatalf("valid ratios rejected: %v", err)
+	}
+	bad := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{1.5}}
+	if _, _, err := bad.Validate("path"); err == nil {
+		t.Fatalf("expected error for out-of-range ratio, got nil")
+	}
+	negative := &Config{Host: "1.2.3.4", MeshDecimationRatios: []float64{-0.1}}
+	if _, _, err := negative.Validate("path"); err == nil {
+		t.Fatalf("expected error for negative ratio, got nil")
+	}
+}
+
+// TestJSONURDFForwardKinematicsAgree samples several joint configurations and
+// asserts that the embedded JSON kinematics model and the URDF kinematics model
+// produce tool poses that agree within a loose tolerance. A large deviation
+// signals that the two independently-authored models disagree on the tool frame,
+// which would cause a silent TCP jump when toggling use_urdf.
+func TestJSONURDFForwardKinematicsAgree(t *testing.T) {
+	jsonModel, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, "cr10a")
+	if err != nil {
+		t.Fatalf("UnmarshalModelJSON: %v", err)
+	}
+	urdfModel, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatalf("ParseModelXMLFile: %v", err)
+	}
+
+	// Representative joint configs (radians).
+	configs := [][]referenceframe.Input{
+		{0, 0, 0, 0, 0, 0},
+		{0.5, -0.3, 0.7, 0.2, -0.4, 0.1},
+		{-1.2, 0.6, -0.9, 1.0, 0.3, -0.7},
+	}
+	const posTolMM = 10.0 // loose: analytic links vs mesh origins
+	const oriTolDeg = 2.0
+
+	for _, c := range configs {
+		jp, err := jsonModel.Transform(c)
+		if err != nil {
+			t.Fatalf("json Transform %v: %v", c, err)
+		}
+		up, err := urdfModel.Transform(c)
+		if err != nil {
+			t.Fatalf("urdf Transform %v: %v", c, err)
+		}
+
+		dist := jp.Point().Sub(up.Point()).Norm()
+		oriDiff := spatialmath.QuatToR3AA(
+			spatialmath.OrientationBetween(jp.Orientation(), up.Orientation()).Quaternion(),
+		).Norm() * 180 / math.Pi
+
+		t.Logf("config %v: posΔ=%.2fmm oriΔ=%.2f°", c, dist, oriDiff)
+		if dist > posTolMM {
+			t.Errorf("config %v: position diff %.2fmm exceeds %.1fmm", c, dist, posTolMM)
+		}
+		if oriDiff > oriTolDeg {
+			t.Errorf("config %v: orientation diff %.2f° exceeds %.1f°", c, oriDiff, oriTolDeg)
+		}
+	}
+}
+
 // TestParseDragSensitivityArgs covers the set_drag_sensitivity arg parsing:
 // required value (1..90), optional index (default 0, else 0..6), float64→int
 // truncation, and — critically — that the index-out-of-range failure returns a
@@ -291,4 +413,175 @@ func TestParseDragSensitivityArgs(t *testing.T) {
 	if valErr == nil || idxErr == nil || valErr.Error() == idxErr.Error() {
 		t.Fatalf("value error %v and index error %v must be non-nil and distinct", valErr, idxErr)
 	}
+}
+
+// cr10aWorldPosesZero reconstructs world-frame poses for every link and joint
+// frame in cfg, evaluated at all-zero inputs (home position). Results are keyed
+// by frame ID and memoized for efficiency.
+func cr10aWorldPosesZero(t *testing.T, cfg *referenceframe.ModelConfigJSON) map[string]spatialmath.Pose {
+	t.Helper()
+	transforms := map[string]referenceframe.Frame{}
+	parent := map[string]string{}
+	for i := range cfg.Links {
+		l := &cfg.Links[i]
+		lif, err := l.ParseConfig()
+		if err != nil {
+			t.Fatalf("link %s ParseConfig: %v", l.ID, err)
+		}
+		f, err := lif.ToStaticFrame(l.ID)
+		if err != nil {
+			t.Fatalf("link %s ToStaticFrame: %v", l.ID, err)
+		}
+		transforms[l.ID] = f
+		parent[l.ID] = l.Parent
+	}
+	for i := range cfg.Joints {
+		j := &cfg.Joints[i]
+		f, err := j.ToFrame()
+		if err != nil {
+			t.Fatalf("joint %s ToFrame: %v", j.ID, err)
+		}
+		transforms[j.ID] = f
+		parent[j.ID] = j.Parent
+	}
+	memo := map[string]spatialmath.Pose{}
+	var world func(name string) spatialmath.Pose
+	world = func(name string) spatialmath.Pose {
+		if name == "" || name == referenceframe.World {
+			return spatialmath.NewZeroPose()
+		}
+		if p, ok := memo[name]; ok {
+			return p
+		}
+		fr, ok := transforms[name]
+		if !ok {
+			t.Fatalf("frame %q not found", name)
+		}
+		var in []referenceframe.Input
+		if d := len(fr.DoF()); d > 0 {
+			in = make([]referenceframe.Input, d)
+		}
+		local, err := fr.Transform(in)
+		if err != nil {
+			t.Fatalf("frame %s Transform: %v", name, err)
+		}
+		res := spatialmath.Compose(world(parent[name]), local)
+		memo[name] = res
+		return res
+	}
+	for name := range transforms {
+		world(name)
+	}
+	return memo
+}
+
+// TestPerLinkFrameAlignment verifies that the JSON (UR-derived) and URDF link
+// frames coincide at home position to within 1 mm / 1°. This is the guard that
+// makes it safe to key the bundled STL meshes by either model's frame names —
+// if the frames ever drift, this test fails before Get3DModels silently
+// misregisters a mesh.
+func TestPerLinkFrameAlignment(t *testing.T) {
+	jsonModel, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, "cr10a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	urdfModel, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jp := cr10aWorldPosesZero(t, jsonModel.ModelConfig())
+	up := cr10aWorldPosesZero(t, urdfModel.ModelConfig())
+
+	pairs := [][2]string{
+		{"base_link", "base_link"},
+		{"shoulder_link", "Link1"},
+		{"upper_arm_link", "Link2"},
+		{"forearm_link", "Link3"},
+		{"wrist_1_link", "Link4"},
+		{"wrist_2_link", "Link5"},
+		{"ee_link", "Link6"},
+	}
+	const posTolMM = 1.0
+	const oriTolDeg = 1.0
+	for _, pr := range pairs {
+		j, ok1 := jp[pr[0]]
+		u, ok2 := up[pr[1]]
+		if !ok1 || !ok2 {
+			t.Fatalf("missing pose json[%s]=%v urdf[%s]=%v", pr[0], ok1, pr[1], ok2)
+		}
+		posD := j.Point().Sub(u.Point()).Norm()
+		oriD := spatialmath.QuatToR3AA(
+			spatialmath.OrientationBetween(j.Orientation(), u.Orientation()).Quaternion(),
+		).Norm() * 180 / math.Pi
+		t.Logf("%s<->%s posΔ=%.4fmm oriΔ=%.4f°", pr[0], pr[1], posD, oriD)
+		if posD > posTolMM {
+			t.Errorf("%s<->%s position diff %.4fmm exceeds %.1fmm", pr[0], pr[1], posD, posTolMM)
+		}
+		if oriD > oriTolDeg {
+			t.Errorf("%s<->%s orientation diff %.4f° exceeds %.1f°", pr[0], pr[1], oriD, oriTolDeg)
+		}
+	}
+}
+
+// TestGet3DModelsReturnsMeshes exercises Get3DModels in both kinematics modes by
+// pointing VIAM_MODULE_ROOT at the repo root (go test runs with CWD = arm/, so
+// ".." resolves there). Each case asserts 7 PLY entries keyed by the mode's
+// frame names, with non-empty mesh bytes.
+func TestGet3DModelsReturnsMeshes(t *testing.T) {
+	t.Setenv("VIAM_MODULE_ROOT", "..")
+
+	cases := []struct {
+		name      string
+		useURDF   bool
+		wantNames []string
+	}{
+		{
+			name:      "json frame names (use_urdf false)",
+			useURDF:   false,
+			wantNames: []string{"base_link", "shoulder_link", "upper_arm_link", "forearm_link", "wrist_1_link", "wrist_2_link", "ee_link"},
+		},
+		{
+			name:      "urdf frame names (use_urdf true)",
+			useURDF:   true,
+			wantNames: []string{"base_link", "Link1", "Link2", "Link3", "Link4", "Link5", "Link6"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &cr10a{
+				logger:      logging.NewTestLogger(t),
+				meshUseURDF: tc.useURDF,
+			}
+
+			meshes, err := a.Get3DModels(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("Get3DModels returned error: %v", err)
+			}
+			if len(meshes) != len(tc.wantNames) {
+				t.Fatalf("expected %d meshes, got %d (keys %v)", len(tc.wantNames), len(meshes), keysOf(meshes))
+			}
+			for _, name := range tc.wantNames {
+				m, ok := meshes[name]
+				if !ok {
+					t.Errorf("missing mesh for frame %q", name)
+					continue
+				}
+				if m.ContentType != "ply" {
+					t.Errorf("frame %q: expected ContentType \"ply\", got %q", name, m.ContentType)
+				}
+				if len(m.Mesh) == 0 {
+					t.Errorf("frame %q: Mesh bytes are empty", name)
+				}
+			}
+		})
+	}
+}
+
+func keysOf(m map[string]*commonpb.Mesh) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

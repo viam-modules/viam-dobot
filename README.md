@@ -48,6 +48,8 @@ Example attributes configuration:
 | `joint_speed`    | int  | 50    | Per-`MovJ` `VelJ` percent. |
 | `joint_accel`    | int  | 50    | Per-`MovJ` `AccJ` percent. |
 | `auto_enable`    | bool | true  | Issue `EnableRobot()` at module start. |
+| `use_urdf`       | bool | false | When `true`, loads kinematics and visual/collision meshes from the bundled `arm/cr10a.urdf` instead of the default embedded capsule-geometry JSON. Gives a richer 3D visualization in the Viam app and mesh-accurate collision geometry for motion planning, at the cost of slower planning. Requires `VIAM_MODULE_ROOT` to be set (automatic when run via `viam-server`). Default remains `false` until the URDF is validated on hardware. |
+| `mesh_decimation_ratios` | array of numbers | `[0.1, …]` (7 entries) | Per-collision-mesh simplification ratio in URDF document order (`base_link` followed by `Link1`–`Link6`). Only ratios strictly between 0 and 1 (exclusive) actually simplify a mesh — a value of `0` or `1` leaves that mesh at full resolution; within (0,1), smaller values simplify more aggressively. Supply one ratio per mesh (7 total); if you provide fewer than 7, trailing meshes are left at full resolution. Only used when `use_urdf` is `true`. Omit to accept the default 0.1 for all 7 meshes. |
 
 ### DoCommand actions
 
@@ -119,8 +121,12 @@ frame system).
   which produces a joint trajectory; the driver never sends `MovL`. If
   you specifically need on-controller linear interpolation, add a
   DoCommand action.
-- **Get3DModels returns empty.** Collision geometry is the cylinders in
-  the kinematics JSON; we don't ship STL meshes.
+- **`Get3DModels` returns the link meshes.** It serves the 7 bundled
+  CR10A STL meshes converted to PLY, keyed to the active kinematic
+  model's frame names, regardless of `use_urdf` (the JSON and URDF link
+  frames coincide, guarded by `TestPerLinkFrameAlignment`). It needs
+  `VIAM_MODULE_ROOT` set to find the meshes; if unset it logs a warning
+  and returns an empty map.
 - **CR10A vs CR10.** The URDF is labeled `cr10_robot`. CR10A is the "A"
   refresh of CR10 and shares the same link geometry but has updated
   joint hardware. The kinematic chain is identical for motion planning

@@ -17,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -36,7 +38,7 @@ import (
 //
 // Update the namespace if you fork this module under a different organization;
 // the wire model string is `<namespace>:dobot:cr10a`.
-var Model = resource.ModelNamespace("viam-soleng").WithFamily("dobot").WithModel("cr10a")
+var Model = resource.ModelNamespace("viam").WithFamily("dobot").WithModel("cr10a")
 
 //go:embed cr10a_kinematics.json
 var cr10aKinematicsJSON []byte
@@ -90,6 +92,20 @@ type Config struct {
 	JointAccel int `json:"joint_accel,omitempty"`
 	// AutoEnable enables servos at module start; default true.
 	AutoEnable *bool `json:"auto_enable,omitempty"`
+	// UseURDF loads kinematics + meshes from arm/cr10a.urdf instead of the
+	// embedded capsule JSON. Default false (embedded JSON) until the URDF is
+	// hardware-validated. Requires VIAM_MODULE_ROOT to be set (it is, under
+	// viam-server).
+	UseURDF bool `json:"use_urdf,omitempty"`
+	// MeshDecimationRatios is the per-collision-mesh simplification ratio in
+	// [0,1] used when UseURDF is set. The RDK URDF parser applies these to
+	// collision meshes in URDF document order — for the CR10A that's base_link
+	// followed by the 6 link meshes (7 total), not one per joint. Only ratios
+	// strictly in (0,1) actually decimate a mesh; a value of 0 or 1 leaves that
+	// mesh at full resolution. Lower = more aggressive within (0,1). If fewer
+	// than 7 ratios are supplied, trailing meshes are left undecimated. Defaults
+	// to 0.1 for each of the 7 meshes when empty. Ignored unless UseURDF is true.
+	MeshDecimationRatios []float64 `json:"mesh_decimation_ratios,omitempty"`
 }
 
 // Validate satisfies resource.ConfigValidator.
@@ -106,6 +122,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			return nil, nil, fmt.Errorf("%s must be between 1 and 100, got %d", name, v)
 		}
 	}
+	for i, r := range cfg.MeshDecimationRatios {
+		if math.IsNaN(r) || r < 0 || r > 1 {
+			return nil, nil, fmt.Errorf("mesh_decimation_ratios[%d] must be in [0, 1], got %f", i, r)
+		}
+	}
 	return nil, nil, nil
 }
 
@@ -113,6 +134,21 @@ func init() {
 	resource.RegisterComponent(arm.API, Model, resource.Registration[arm.Arm, *Config]{
 		Constructor: newCR10A,
 	})
+}
+
+// cr10aMeshParts lists each bundled link mesh with the frame name it maps to
+// under each kinematics source, in kinematic order. The STL is authored in the
+// URDF link frame; the JSON (UR-derived) frame coincides with it (guarded by
+// TestPerLinkFrameAlignment), so either name keys it correctly. This is the
+// single source of truth for the per-link (file, jsonName, urdfName) triple.
+var cr10aMeshParts = []struct{ stlFile, jsonName, urdfName string }{
+	{"base_link.STL", "base_link", "base_link"},
+	{"Link1.STL", "shoulder_link", "Link1"},
+	{"Link2.STL", "upper_arm_link", "Link2"},
+	{"Link3.STL", "forearm_link", "Link3"},
+	{"Link4.STL", "wrist_1_link", "Link4"},
+	{"Link5.STL", "wrist_2_link", "Link5"},
+	{"Link6.STL", "ee_link", "Link6"},
 }
 
 // cr10a is the live arm.Arm implementation.
@@ -129,6 +165,16 @@ type cr10a struct {
 	speedFactor int
 	jointSpeed  int
 	jointAccel  int
+
+	// meshUseURDF selects which frame-name set Get3DModels keys the bundled
+	// link meshes by: the URDF names when true, the JSON (UR-derived) names
+	// when false. Set in Reconfigure from the active config.
+	meshUseURDF bool
+	// meshCache holds the lazily-built PLY meshes; nil means not yet built.
+	meshCache map[string]*commonpb.Mesh
+	// meshCacheBuiltURDF records the meshUseURDF value the cache was built for,
+	// so a use_urdf toggle invalidates it on the next read.
+	meshCacheBuiltURDF bool
 }
 
 func newCR10A(
@@ -156,7 +202,7 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 		return err
 	}
 
-	model, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, conf.ResourceName().ShortName())
+	model, err := makeModelFrame(newConf, conf.ResourceName().ShortName())
 	if err != nil {
 		return fmt.Errorf("loading CR10A kinematics: %w", err)
 	}
@@ -186,6 +232,11 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 	a.speedFactor = speedFactor
 	a.jointSpeed = jointSpeed
 	a.jointAccel = jointAccel
+	a.meshUseURDF = newConf.UseURDF
+	// Drop any cached meshes. Strictly the cache key (meshCacheBuiltURDF) already
+	// covers a use_urdf flip, but resetting here keeps reconfigure the single
+	// place that owns connection+derived state.
+	a.meshCache = nil
 	a.mu.Unlock()
 
 	// start feedback reader (it survives Reconfigure because we just reassigned)
@@ -290,11 +341,82 @@ func (a *cr10a) Geometries(ctx context.Context, _ map[string]interface{}) ([]spa
 	return gif.Geometries(), nil
 }
 
+// Get3DModels returns the bundled link meshes (base_link + Link1..Link6) as
+// PLY, keyed by the active kinematic model's frame names — the URDF names when
+// use_urdf is true, the JSON (UR-derived) names when false. The frames coincide
+// geometrically (verified by TestPerLinkFrameAlignment), so the same seven STL
+// files serve both models.
+//
+// If VIAM_MODULE_ROOT is unset the method logs a warning and returns an empty
+// map with a nil error — meshes are simply unavailable in that environment
+// (unit tests, developer workstations) and 3D visualisation should degrade
+// gracefully. A per-file read/parse failure returns a wrapped error.
+//
+// Results are cached on the struct, keyed by the active use_urdf mode, and
+// invalidated by Reconfigure. The returned map is a shallow copy so callers
+// can't mutate the cache.
 func (a *cr10a) Get3DModels(_ context.Context, _ map[string]interface{}) (map[string]*commonpb.Mesh, error) {
-	// We don't ship STL meshes; collision geometry is the cylinders in the
-	// kinematics JSON. Returning an empty map is the convention for arm
-	// modules that have no 3D mesh assets.
-	return map[string]*commonpb.Mesh{}, nil
+	root := os.Getenv("VIAM_MODULE_ROOT")
+	if root == "" {
+		a.logger.Warn("Get3DModels: VIAM_MODULE_ROOT is not set; returning empty mesh map")
+		return map[string]*commonpb.Mesh{}, nil
+	}
+
+	a.mu.RLock()
+	useURDF := a.meshUseURDF
+	cached := a.meshCache
+	cacheURDF := a.meshCacheBuiltURDF
+	a.mu.RUnlock()
+
+	if cached != nil && cacheURDF == useURDF {
+		return cloneMeshMap(cached), nil
+	}
+
+	built, err := buildMeshMap(root, useURDF)
+	if err != nil {
+		return nil, err
+	}
+
+	a.mu.Lock()
+	a.meshCache = built
+	a.meshCacheBuiltURDF = useURDF
+	a.mu.Unlock()
+
+	return cloneMeshMap(built), nil
+}
+
+// cloneMeshMap returns a shallow copy of m (a fresh map sharing the same
+// *commonpb.Mesh values), so a caller mutating the returned map can't corrupt
+// the cached one.
+func cloneMeshMap(m map[string]*commonpb.Mesh) map[string]*commonpb.Mesh {
+	out := make(map[string]*commonpb.Mesh, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// buildMeshMap reads each STL under moduleRoot/arm/meshes/cr10/, converts it to
+// PLY via TrianglesToPLYBytes, and keys the result by the matching frame name
+// for the active mode (URDF names when useURDF, JSON names otherwise).
+func buildMeshMap(moduleRoot string, useURDF bool) (map[string]*commonpb.Mesh, error) {
+	out := make(map[string]*commonpb.Mesh, len(cr10aMeshParts))
+	for _, part := range cr10aMeshParts {
+		path := filepath.Join(moduleRoot, "arm", "meshes", "cr10", part.stlFile)
+		mesh, err := spatialmath.NewMeshFromSTLFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("loading mesh %q: %w", path, err)
+		}
+		name := part.jsonName
+		if useURDF {
+			name = part.urdfName
+		}
+		out[name] = &commonpb.Mesh{
+			ContentType: "ply",
+			Mesh:        mesh.TrianglesToPLYBytes(false),
+		}
+	}
+	return out, nil
 }
 
 // ---------- arm.Arm: motion ----------
@@ -609,4 +731,40 @@ func orDefault[T int](v, def T) T {
 		return def
 	}
 	return v
+}
+
+// cr10a.urdf has 7 collision meshes: base_link + Link1..Link6. The RDK URDF
+// parser assigns mesh_decimation_ratios per collision mesh in document order
+// (base_link is index 0), so we need one ratio per mesh, not one per joint —
+// a 6-element default would leave the heaviest wrist mesh (Link6) undecimated.
+const (
+	numCR10ACollisionMeshes = 7
+	defaultMeshDecimation   = 0.1
+)
+
+// makeModelFrame builds the kinematic model from either the embedded capsule
+// JSON (default) or the bundled URDF + meshes (when conf.UseURDF). The URDF
+// path is resolved against VIAM_MODULE_ROOT, which viam-server sets to the
+// unpacked module directory.
+func makeModelFrame(conf *Config, name string) (referenceframe.Model, error) {
+	if !conf.UseURDF {
+		return referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, name)
+	}
+	ratios := conf.MeshDecimationRatios
+	if len(ratios) == 0 {
+		ratios = make([]float64, numCR10ACollisionMeshes)
+		for i := range ratios {
+			ratios[i] = defaultMeshDecimation
+		}
+	}
+	root := os.Getenv("VIAM_MODULE_ROOT")
+	if root == "" {
+		return nil, errors.New("use_urdf is set but VIAM_MODULE_ROOT is empty")
+	}
+	path := filepath.Join(root, "arm", "cr10a.urdf")
+	model, err := referenceframe.ParseModelXMLFile(path, name, ratios)
+	if err != nil {
+		return nil, fmt.Errorf("parsing URDF %q: %w", path, err)
+	}
+	return model, nil
 }
