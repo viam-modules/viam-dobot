@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ import (
 //
 // Update the namespace if you fork this module under a different organization;
 // the wire model string is `<namespace>:dobot:cr10a`.
-var Model = resource.ModelNamespace("viam").WithFamily("dobot").WithModel("cr10a")
+var Model = resource.ModelNamespace("viam-soleng").WithFamily("dobot").WithModel("cr10a")
 
 //go:embed cr10a_kinematics.json
 var cr10aKinematicsJSON []byte
@@ -169,7 +170,7 @@ type cr10a struct {
 	jointAccel    int
 	meshPartNames []string                  // active frame-name slice for Get3DModels
 	meshCache     map[string]*commonpb.Mesh // lazily built; nil means not yet built
-	meshCacheKey  string                    // first element of meshPartNames at cache-build time
+	meshCacheKey  string                    // strings.Join(meshPartNames,",") at cache-build time
 }
 
 func newCR10A(
@@ -367,12 +368,10 @@ func (a *cr10a) Get3DModels(_ context.Context, _ map[string]interface{}) (map[st
 	cached := a.meshCache
 	a.mu.RUnlock()
 
-	// Use cache key = first element of the active name slice (base_link is
-	// stable, so this distinguishes JSON vs URDF name sets cheaply).
-	activeKey := ""
-	if len(names) > 0 {
-		activeKey = names[0]
-	}
+	// Key the cache on the full active name set so a use_urdf toggle (which
+	// swaps the slice but keeps base_link as the first element) actually
+	// invalidates a stale cache. The two slices differ from Link1 onward.
+	activeKey := strings.Join(names, ",")
 	if cached != nil && cacheKey == activeKey {
 		return cached, nil
 	}
