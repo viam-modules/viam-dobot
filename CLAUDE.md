@@ -21,7 +21,7 @@ The build targets in `meta.json` are `linux/amd64`, `linux/arm64`, `darwin/arm64
 
 ## Architecture
 
-This is a Viam **arm component module**. `main.go` registers exactly one model — `viam-soleng:dobot:cr10a` — against `arm.API` and hands lifecycle to `module.ModularMain`. All real code lives in the `arm/` package.
+This is a Viam **arm component module**. `main.go` registers exactly one model — `viam:dobot:cr10a` — against `arm.API` and hands lifecycle to `module.ModularMain`. All real code lives in the `arm/` package.
 
 ### Three layers, three concerns
 

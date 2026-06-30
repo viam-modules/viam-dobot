@@ -38,7 +38,7 @@ import (
 //
 // Update the namespace if you fork this module under a different organization;
 // the wire model string is `<namespace>:dobot:cr10a`.
-var Model = resource.ModelNamespace("viam-soleng").WithFamily("dobot").WithModel("cr10a")
+var Model = resource.ModelNamespace("viam").WithFamily("dobot").WithModel("cr10a")
 
 //go:embed cr10a_kinematics.json
 var cr10aKinematicsJSON []byte
