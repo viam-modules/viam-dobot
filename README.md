@@ -121,8 +121,12 @@ frame system).
   which produces a joint trajectory; the driver never sends `MovL`. If
   you specifically need on-controller linear interpolation, add a
   DoCommand action.
-- **Get3DModels returns empty.** Collision geometry is the cylinders in
-  the kinematics JSON; we don't ship STL meshes.
+- **`Get3DModels` returns the link meshes.** It serves the 7 bundled
+  CR10A STL meshes converted to PLY, keyed to the active kinematic
+  model's frame names, regardless of `use_urdf` (the JSON and URDF link
+  frames coincide, guarded by `TestPerLinkFrameAlignment`). It needs
+  `VIAM_MODULE_ROOT` set to find the meshes; if unset it logs a warning
+  and returns an empty map.
 - **CR10A vs CR10.** The URDF is labeled `cr10_robot`. CR10A is the "A"
   refresh of CR10 and shares the same link geometry but has updated
   joint hardware. The kinematic chain is identical for motion planning
