@@ -14,7 +14,7 @@ $(BIN): Makefile main.go arm/*.go arm/*.json
 	 GOOS=$(VIAM_BUILD_OS) GOARCH=$(VIAM_BUILD_ARCH) $(GO_BUILD_ENV) go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN) .
 
 module: $(BIN)
-	tar -czf $(TARBALL) $(BIN) meta.json arm/cr10a.urdf arm/meshes
+	tar -czf $(TARBALL) $(BIN) meta.json arm/cr10a.urdf arm/meshes arm/3d_models
 
 lint:
 	go vet ./...

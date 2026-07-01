@@ -140,15 +140,18 @@ func init() {
 // under each kinematics source, in kinematic order. The STL is authored in the
 // URDF link frame; the JSON (UR-derived) frame coincides with it (guarded by
 // TestPerLinkFrameAlignment), so either name keys it correctly. This is the
-// single source of truth for the per-link (file, jsonName, urdfName) triple.
-var cr10aMeshParts = []struct{ stlFile, jsonName, urdfName string }{
-	{"base_link.STL", "base_link", "base_link"},
-	{"Link1.STL", "shoulder_link", "Link1"},
-	{"Link2.STL", "upper_arm_link", "Link2"},
-	{"Link3.STL", "forearm_link", "Link3"},
-	{"Link4.STL", "wrist_1_link", "Link4"},
-	{"Link5.STL", "wrist_2_link", "Link5"},
-	{"Link6.STL", "ee_link", "Link6"},
+// single source of truth for the per-link (stl, glb, jsonName, urdfName) quad.
+// The STL (meters, scaled to mm on import by spatialmath) backs collision
+// Geometries(); the GLB (meters, served as-is) backs Get3DModels for the app's
+// 3D scene viewer, which expects model/gltf-binary rather than PLY.
+var cr10aMeshParts = []struct{ stlFile, glbFile, jsonName, urdfName string }{
+	{"base_link.STL", "base_link.glb", "base_link", "base_link"},
+	{"Link1.STL", "Link1.glb", "shoulder_link", "Link1"},
+	{"Link2.STL", "Link2.glb", "upper_arm_link", "Link2"},
+	{"Link3.STL", "Link3.glb", "forearm_link", "Link3"},
+	{"Link4.STL", "Link4.glb", "wrist_1_link", "Link4"},
+	{"Link5.STL", "Link5.glb", "wrist_2_link", "Link5"},
+	{"Link6.STL", "Link6.glb", "ee_link", "Link6"},
 }
 
 // cr10a is the live arm.Arm implementation.
@@ -170,7 +173,7 @@ type cr10a struct {
 	// link meshes by: the URDF names when true, the JSON (UR-derived) names
 	// when false. Set in Reconfigure from the active config.
 	meshUseURDF bool
-	// meshCache holds the lazily-built PLY meshes; nil means not yet built.
+	// meshCache holds the lazily-built GLB meshes; nil means not yet built.
 	meshCache map[string]*commonpb.Mesh
 	// meshCacheBuiltURDF records the meshUseURDF value the cache was built for,
 	// so a use_urdf toggle invalidates it on the next read.
@@ -342,10 +345,11 @@ func (a *cr10a) Geometries(ctx context.Context, _ map[string]interface{}) ([]spa
 }
 
 // Get3DModels returns the bundled link meshes (base_link + Link1..Link6) as
-// PLY, keyed by the active kinematic model's frame names — the URDF names when
-// use_urdf is true, the JSON (UR-derived) names when false. The frames coincide
-// geometrically (verified by TestPerLinkFrameAlignment), so the same seven STL
-// files serve both models.
+// binary glTF (GLB, model/gltf-binary), keyed by the active kinematic model's
+// frame names — the URDF names when use_urdf is true, the JSON (UR-derived)
+// names when false. The frames coincide geometrically (verified by
+// TestPerLinkFrameAlignment), so the same seven GLB files serve both models.
+// GLB is required because the app's 3D scene viewer renders glTF, not PLY.
 //
 // If VIAM_MODULE_ROOT is unset the method logs a warning and returns an empty
 // map with a nil error — meshes are simply unavailable in that environment
@@ -396,14 +400,18 @@ func cloneMeshMap(m map[string]*commonpb.Mesh) map[string]*commonpb.Mesh {
 	return out
 }
 
-// buildMeshMap reads each STL under moduleRoot/arm/meshes/cr10/, converts it to
-// PLY via TrianglesToPLYBytes, and keys the result by the matching frame name
-// for the active mode (URDF names when useURDF, JSON names otherwise).
+// buildMeshMap reads each binary glTF (GLB) under moduleRoot/arm/3d_models/cr10/
+// and keys the raw bytes by the matching frame name for the active mode (URDF
+// names when useURDF, JSON names otherwise). GLB is served with ContentType
+// "model/gltf-binary" because the app's 3D scene viewer renders glTF, not PLY.
+// The meshes are authored in meters (the glTF convention) and placed by the
+// frame system, so no unit scaling is applied here.
 func buildMeshMap(moduleRoot string, useURDF bool) (map[string]*commonpb.Mesh, error) {
 	out := make(map[string]*commonpb.Mesh, len(cr10aMeshParts))
 	for _, part := range cr10aMeshParts {
-		path := filepath.Join(moduleRoot, "arm", "meshes", "cr10", part.stlFile)
-		mesh, err := spatialmath.NewMeshFromSTLFile(path)
+		path := filepath.Join(moduleRoot, "arm", "3d_models", "cr10", part.glbFile)
+		// #nosec G304 -- path is built from the module root and a fixed table, no user input.
+		glb, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("loading mesh %q: %w", path, err)
 		}
@@ -412,8 +420,8 @@ func buildMeshMap(moduleRoot string, useURDF bool) (map[string]*commonpb.Mesh, e
 			name = part.urdfName
 		}
 		out[name] = &commonpb.Mesh{
-			ContentType: "ply",
-			Mesh:        mesh.TrianglesToPLYBytes(false),
+			ContentType: "model/gltf-binary",
+			Mesh:        glb,
 		}
 	}
 	return out, nil

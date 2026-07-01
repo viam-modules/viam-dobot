@@ -525,8 +525,8 @@ func TestPerLinkFrameAlignment(t *testing.T) {
 
 // TestGet3DModelsReturnsMeshes exercises Get3DModels in both kinematics modes by
 // pointing VIAM_MODULE_ROOT at the repo root (go test runs with CWD = arm/, so
-// ".." resolves there). Each case asserts 7 PLY entries keyed by the mode's
-// frame names, with non-empty mesh bytes.
+// ".." resolves there). Each case asserts 7 GLB entries keyed by the mode's
+// frame names, with non-empty mesh bytes and a valid glTF binary header.
 func TestGet3DModelsReturnsMeshes(t *testing.T) {
 	t.Setenv("VIAM_MODULE_ROOT", "..")
 
@@ -567,11 +567,13 @@ func TestGet3DModelsReturnsMeshes(t *testing.T) {
 					t.Errorf("missing mesh for frame %q", name)
 					continue
 				}
-				if m.ContentType != "ply" {
-					t.Errorf("frame %q: expected ContentType \"ply\", got %q", name, m.ContentType)
+				if m.ContentType != "model/gltf-binary" {
+					t.Errorf("frame %q: expected ContentType %q, got %q", name, "model/gltf-binary", m.ContentType)
 				}
 				if len(m.Mesh) == 0 {
 					t.Errorf("frame %q: Mesh bytes are empty", name)
+				} else if string(m.Mesh[:4]) != "glTF" {
+					t.Errorf("frame %q: expected glTF binary magic, got % x", name, m.Mesh[:min(4, len(m.Mesh))])
 				}
 			}
 		})

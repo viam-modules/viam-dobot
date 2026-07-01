@@ -10,6 +10,12 @@
       "model": "viam:dobot:cr10a",
       "markdown_link": "README.md#configure",
       "short_description": "Driver for the Dobot CR10A using the CR-series TCP/IP remote-control protocol."
+    },
+    {
+      "api": "rdk:component:arm",
+      "model": "viam:dobot:cr10a-simulated",
+      "markdown_link": "README.md#simulated-arm",
+      "short_description": "Hardware-free simulated CR10A arm sharing the same kinematics and meshes, for testing motions without a connected robot."
     }
   ],
   "build": {
