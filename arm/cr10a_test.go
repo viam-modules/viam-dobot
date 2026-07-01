@@ -4,9 +4,11 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/golang/geo/r3"
 	commonpb "go.viam.com/api/common/v1"
 
 	"go.viam.com/rdk/logging"
@@ -316,6 +318,39 @@ func TestJSONURDFForwardKinematicsAgree(t *testing.T) {
 	}
 }
 
+// TestJSONURDFJointLimitsAgree asserts the embedded JSON kinematics model and the
+// URDF model expose the same per-joint limits. The URDF (<limit lower/upper> in
+// radians) is the source of truth; the JSON stores the same bounds in degrees.
+// Because the JSON limits are hand-authored, a copy that drifts from the URDF
+// (e.g. the old ±180°/±360° placeholders) lets the planner refuse or attempt
+// joint angles the real arm's range disagrees with — this guards against that.
+func TestJSONURDFJointLimitsAgree(t *testing.T) {
+	jsonModel, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, "cr10a")
+	if err != nil {
+		t.Fatalf("UnmarshalModelJSON: %v", err)
+	}
+	urdfModel, err := referenceframe.ParseModelXMLFile("cr10a.urdf", "cr10a", nil)
+	if err != nil {
+		t.Fatalf("ParseModelXMLFile: %v", err)
+	}
+
+	jDoF := jsonModel.DoF()
+	uDoF := urdfModel.DoF()
+	if len(jDoF) != len(uDoF) {
+		t.Fatalf("DoF mismatch: json %d, urdf %d", len(jDoF), len(uDoF))
+	}
+
+	// DoF() returns limits in radians. 1e-4 rad ≈ 0.006° absorbs the
+	// deg→rad round-trip without hiding a real placeholder mismatch.
+	const tolRad = 1e-4
+	for i := range jDoF {
+		if math.Abs(jDoF[i].Min-uDoF[i].Min) > tolRad || math.Abs(jDoF[i].Max-uDoF[i].Max) > tolRad {
+			t.Errorf("joint %d limits disagree: json [%.5f, %.5f] rad, urdf [%.5f, %.5f] rad",
+				i+1, jDoF[i].Min, jDoF[i].Max, uDoF[i].Min, uDoF[i].Max)
+		}
+	}
+}
+
 // TestParseDragSensitivityArgs covers the set_drag_sensitivity arg parsing:
 // required value (1..90), optional index (default 0, else 0..6), float64→int
 // truncation, and — critically — that the index-out-of-range failure returns a
@@ -523,10 +558,108 @@ func TestPerLinkFrameAlignment(t *testing.T) {
 	}
 }
 
+// TestJSONGeometriesFitMeshes guards that each JSON collision volume is centered
+// on AND aligned with the link mesh it approximates. Every STL is authored in its
+// link's frame (the JSON link frame it maps to via cr10aMeshParts), and the GLB
+// served to the viewer renders in that same frame, so the collision geometry must
+// share it. Two failure modes have bitten this file: capsules copied from the UR
+// model sat up to ~200 mm off their meshes (center), and capsules whose long axis
+// pointed along the wrong local axis rendered perpendicular to the link
+// (orientation). This checks both.
+func TestJSONGeometriesFitMeshes(t *testing.T) {
+	model, err := referenceframe.UnmarshalModelJSON(cr10aKinematicsJSON, "cr10a")
+	if err != nil {
+		t.Fatalf("UnmarshalModelJSON: %v", err)
+	}
+	geomCfg := map[string]*spatialmath.GeometryConfig{}
+	for _, l := range model.ModelConfig().Links {
+		if l.Geometry != nil {
+			geomCfg[l.ID] = l.Geometry
+		}
+	}
+
+	const centerTolMM = 5.0
+	const sizeTolMM = 20.0 // capsule/box extent vs mesh AABB extent (approximation slack)
+	for _, part := range cr10aMeshParts {
+		mesh, err := spatialmath.NewMeshFromSTLFile(filepath.Join("meshes", "cr10", part.stlFile))
+		if err != nil {
+			t.Fatalf("load %s: %v", part.stlFile, err)
+		}
+		lo := r3.Vector{X: math.Inf(1), Y: math.Inf(1), Z: math.Inf(1)}
+		hi := r3.Vector{X: math.Inf(-1), Y: math.Inf(-1), Z: math.Inf(-1)}
+		for _, tri := range mesh.Triangles() {
+			for _, p := range tri.Points() {
+				lo = r3.Vector{X: math.Min(lo.X, p.X), Y: math.Min(lo.Y, p.Y), Z: math.Min(lo.Z, p.Z)}
+				hi = r3.Vector{X: math.Max(hi.X, p.X), Y: math.Max(hi.Y, p.Y), Z: math.Max(hi.Z, p.Z)}
+			}
+		}
+		center := lo.Add(hi).Mul(0.5)
+		ext := hi.Sub(lo)
+		extArr := [3]float64{ext.X, ext.Y, ext.Z}
+		longAxis := 0
+		for i, e := range extArr {
+			if e > extArr[longAxis] {
+				longAxis = i
+			}
+		}
+
+		cfg, ok := geomCfg[part.jsonName]
+		if !ok {
+			t.Errorf("link %q has no collision geometry", part.jsonName)
+			continue
+		}
+
+		// Center: geometry offset vs mesh AABB center, both in the link frame.
+		if d := center.Sub(cfg.TranslationOffset).Norm(); d > centerTolMM {
+			t.Errorf("link %q geometry center %.1f is %.1fmm from mesh center %.1f",
+				part.jsonName, cfg.TranslationOffset, d, center)
+		}
+
+		geom, err := cfg.ParseConfig()
+		if err != nil {
+			t.Fatalf("link %q ParseConfig: %v", part.jsonName, err)
+		}
+
+		if cfg.L > 0 { // capsule: verify long axis points along the mesh's longest AABB axis
+			ov := geom.Pose().Orientation().OrientationVectorRadians()
+			capAxis := r3.Vector{X: ov.OX, Y: ov.OY, Z: ov.OZ}
+			card := r3.Vector{}
+			switch longAxis {
+			case 0:
+				card = r3.Vector{X: 1}
+			case 1:
+				card = r3.Vector{Y: 1}
+			case 2:
+				card = r3.Vector{Z: 1}
+			}
+			dot := math.Abs(capAxis.Dot(card))
+			t.Logf("%-16s capsule axis=%.2f mesh long axis=%v |dot|=%.3f l=%.1f (ext %.1f)",
+				part.jsonName, capAxis, card, dot, cfg.L, extArr[longAxis])
+			if dot < 0.99 {
+				t.Errorf("link %q capsule long axis %.2f is not aligned with mesh longest axis %v (|dot|=%.3f)",
+					part.jsonName, capAxis, card, dot)
+			}
+			if math.Abs(cfg.L-extArr[longAxis]) > sizeTolMM {
+				t.Errorf("link %q capsule length %.1f differs from mesh long extent %.1f by >%.0fmm",
+					part.jsonName, cfg.L, extArr[longAxis], sizeTolMM)
+			}
+		} else { // box: dims should match the AABB extents per axis
+			for i, d := range [3]float64{cfg.X, cfg.Y, cfg.Z} {
+				if math.Abs(d-extArr[i]) > sizeTolMM {
+					t.Errorf("link %q box dim[%d]=%.1f differs from mesh extent %.1f by >%.0fmm",
+						part.jsonName, i, d, extArr[i], sizeTolMM)
+				}
+			}
+			t.Logf("%-16s box dims=(%.1f,%.1f,%.1f) mesh ext=(%.1f,%.1f,%.1f)",
+				part.jsonName, cfg.X, cfg.Y, cfg.Z, ext.X, ext.Y, ext.Z)
+		}
+	}
+}
+
 // TestGet3DModelsReturnsMeshes exercises Get3DModels in both kinematics modes by
 // pointing VIAM_MODULE_ROOT at the repo root (go test runs with CWD = arm/, so
-// ".." resolves there). Each case asserts 7 PLY entries keyed by the mode's
-// frame names, with non-empty mesh bytes.
+// ".." resolves there). Each case asserts 7 GLB entries keyed by the mode's
+// frame names, with non-empty mesh bytes and a valid glTF binary header.
 func TestGet3DModelsReturnsMeshes(t *testing.T) {
 	t.Setenv("VIAM_MODULE_ROOT", "..")
 
@@ -567,11 +700,13 @@ func TestGet3DModelsReturnsMeshes(t *testing.T) {
 					t.Errorf("missing mesh for frame %q", name)
 					continue
 				}
-				if m.ContentType != "ply" {
-					t.Errorf("frame %q: expected ContentType \"ply\", got %q", name, m.ContentType)
+				if m.ContentType != "model/gltf-binary" {
+					t.Errorf("frame %q: expected ContentType %q, got %q", name, "model/gltf-binary", m.ContentType)
 				}
 				if len(m.Mesh) == 0 {
 					t.Errorf("frame %q: Mesh bytes are empty", name)
+				} else if string(m.Mesh[:4]) != "glTF" {
+					t.Errorf("frame %q: expected glTF binary magic, got % x", name, m.Mesh[:min(4, len(m.Mesh))])
 				}
 			}
 		})
