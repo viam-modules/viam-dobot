@@ -127,10 +127,21 @@ Link lengths in summary:
 | d5    | 125 mm   | wrist 1→2 |
 | d6    | 108.4 mm | flange to TCP (no tool) |
 
-Joint limits default to `±180°` for J1/J2/J4/J5, `±163.9°` for J3, and
-`±360°` for J6 — the conservative URDF-default values. The CR10A hardware
-can in fact rotate further on most joints; widen the `min`/`max` in the
-JSON if your application needs it.
+Joint limits are taken directly from the URDF (`<limit lower/upper>`, in
+radians) and stored in the JSON in degrees: `±359.24°` (±6.27 rad) for
+J1/J2/J4/J5/J6 and `±163.92°` (±2.861 rad) for J3.
+`TestJSONURDFJointLimitsAgree` guards that the two models stay in sync — the
+JSON previously shipped placeholder `±180°`/`±360°` limits that disagreed
+with the URDF and needlessly forbade valid configurations.
+
+Collision geometry depends on the source. With `use_urdf: true` the planner
+uses the decimated link meshes, so collision volumes match the visual model
+exactly. The default embedded JSON instead uses one primitive per link —
+capsules for the long arm/wrist links and boxes for the near-cubic base and
+shoulder housings — each fitted to its link mesh's bounding box.
+`TestJSONGeometriesFitMeshes` keeps every primitive centered on and aligned
+with its mesh. These primitives are approximations of non-cylindrical links;
+use `use_urdf: true` when you need mesh-accurate collision checking.
 
 If you mount a tool, append a fixed `link` between `joint6` and the TCP
 in the kinematics file (or override the model via the motion service's
@@ -161,6 +172,11 @@ frame system).
   committed, pre-converted from the source STLs (which still back
   collision geometry). It needs `VIAM_MODULE_ROOT` set to find the
   meshes; if unset it logs a warning and returns an empty map.
+  Known issue: with the default JSON kinematics the visual meshes do not
+  line up with the SVA collision geometry in the 3D scene viewer (RDK
+  attaches SVA link collision at the head of the link transform while the
+  mesh renders at the tail); URDF-mode collision does line up. This is
+  unresolved.
 - **CR10A vs CR10.** The URDF is labeled `cr10_robot`. CR10A is the "A"
   refresh of CR10 and shares the same link geometry but has updated
   joint hardware. The kinematic chain is identical for motion planning
