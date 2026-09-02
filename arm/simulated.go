@@ -354,6 +354,27 @@ func (s *simulatedCR10A) CurrentInputs(ctx context.Context) ([]referenceframe.In
 	return s.JointPositions(ctx, nil)
 }
 
+func (s *simulatedCR10A) MoveThroughJointPositionsStreamed(
+	ctx context.Context,
+	batches <-chan []arm.TrajectoryPoint,
+	responses chan<- arm.Response,
+	_ map[string]interface{},
+) error {
+	for batch := range batches {
+		for _, p := range batch {
+			if err := s.MoveToJointPositions(ctx, p.Positions, nil); err != nil {
+				return err
+			}
+		}
+		select {
+		case responses <- arm.Response{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 func (s *simulatedCR10A) GoToInputs(ctx context.Context, inputSteps ...[]referenceframe.Input) error {
 	return s.MoveThroughJointPositions(ctx, inputSteps, nil, nil)
 }
