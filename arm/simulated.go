@@ -24,6 +24,7 @@ import (
 
 	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/rdk/components/arm"
+	rdkgrpc "go.viam.com/rdk/grpc"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -438,6 +439,21 @@ func (s *simulatedCR10A) DoCommand(_ context.Context, cmd map[string]interface{}
 	default:
 		return nil, fmt.Errorf("unknown command: %v", cmd["command"])
 	}
+}
+
+func (s *simulatedCR10A) Properties(_ context.Context, _ map[string]interface{}) (arm.Properties, error) {
+	return arm.Properties{
+		SupportManualMode:        false,
+		SupportCartesianCommands: false,
+	}, nil
+}
+
+func (s *simulatedCR10A) SetManualMode(_ context.Context, _ bool, _ time.Duration, _ map[string]interface{}) error {
+	return rdkgrpc.UnimplementedError
+}
+
+func (s *simulatedCR10A) ManualMode(_ context.Context, _ map[string]interface{}) (bool, error) {
+	return false, rdkgrpc.UnimplementedError
 }
 
 func (s *simulatedCR10A) Close(_ context.Context) error {

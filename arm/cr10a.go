@@ -25,6 +25,7 @@ import (
 	commonpb "go.viam.com/api/common/v1"
 
 	"go.viam.com/rdk/components/arm"
+	rdkgrpc "go.viam.com/rdk/grpc"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/operation"
@@ -617,6 +618,24 @@ func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 	default:
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
+}
+
+// Properties reports which optional features the CR10A supports.
+func (a *cr10a) Properties(_ context.Context, _ map[string]interface{}) (arm.Properties, error) {
+	return arm.Properties{
+		SupportManualMode:        false,
+		SupportCartesianCommands: false,
+	}, nil
+}
+
+// SetManualMode is not supported by the CR10A.
+func (a *cr10a) SetManualMode(_ context.Context, _ bool, _ time.Duration, _ map[string]interface{}) error {
+	return rdkgrpc.UnimplementedError
+}
+
+// ManualMode is not supported by the CR10A.
+func (a *cr10a) ManualMode(_ context.Context, _ map[string]interface{}) (bool, error) {
+	return false, rdkgrpc.UnimplementedError
 }
 
 // ---------- helpers ----------
