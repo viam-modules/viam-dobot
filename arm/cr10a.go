@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commonpb "go.viam.com/api/common/v1"
@@ -178,6 +179,13 @@ type cr10a struct {
 	// meshCacheBuiltURDF records the meshUseURDF value the cache was built for,
 	// so a use_urdf toggle invalidates it on the next read.
 	meshCacheBuiltURDF bool
+
+	// manualMode tracks drag/freedrive state — the dashboard protocol has no
+	// drag-state query. Atomic because it is written under a.mu.RLock (see
+	// manual_mode.go and the DoCommand drag actions).
+	manualMode atomic.Bool
+	// manualExit auto-exits manual mode when SetManualMode's enabledFor expires.
+	manualExit exitTimer
 }
 
 func newCR10A(
@@ -282,6 +290,7 @@ func (a *cr10a) Reconfigure(ctx context.Context, _ resource.Dependencies, conf r
 // Close shuts down both TCP clients. It does NOT disable the servos —
 // callers who want to power down should issue DoCommand{"disable": true}.
 func (a *cr10a) Close(ctx context.Context) error {
+	a.manualExit.cancel()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.feedback != nil {
@@ -530,16 +539,24 @@ func (a *cr10a) moveJoint(ctx context.Context, joints []referenceframe.Input, op
 	return a.waitForMotionCompleteLocked(ctx, degTarget)
 }
 
-// Stop immediately halts queued motion. The servos remain enabled; the arm
-// can resume motion with the next MoveTo* call.
+// Stop immediately halts queued motion and exits manual (drag) mode if it is
+// active. The servos remain enabled; the arm can resume motion with the next
+// MoveTo* call.
 func (a *cr10a) Stop(ctx context.Context, _ map[string]interface{}) error {
 	a.opMgr.CancelRunning(ctx)
+	a.manualExit.cancel()
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.dash == nil {
 		return errors.New("CR10A dashboard client not initialized")
 	}
-	return a.dash.stop(ctx)
+	var dragErr error
+	if a.manualMode.Load() {
+		if dragErr = a.dash.stopDrag(ctx); dragErr == nil {
+			a.manualMode.Store(false)
+		}
+	}
+	return errors.Join(dragErr, a.dash.stop(ctx))
 }
 
 // IsMoving consults the feedback packet's running_status byte. Falls back to
@@ -601,9 +618,18 @@ func (a *cr10a) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[
 		}
 		return map[string]interface{}{"mode": mode}, nil
 	case "start_drag":
-		return map[string]interface{}{"ok": true}, a.dash.startDrag(ctx)
+		err := a.dash.startDrag(ctx)
+		if err == nil {
+			a.manualMode.Store(true)
+		}
+		return map[string]interface{}{"ok": true}, err
 	case "stop_drag":
-		return map[string]interface{}{"ok": true}, a.dash.stopDrag(ctx)
+		a.manualExit.cancel()
+		err := a.dash.stopDrag(ctx)
+		if err == nil {
+			a.manualMode.Store(false)
+		}
+		return map[string]interface{}{"ok": true}, err
 	case "set_drag_sensitivity":
 		// Unlike set_speed (which silently clamps), this rejects out-of-range
 		// input — a deliberate UX choice so a bad sensitivity is surfaced rather
