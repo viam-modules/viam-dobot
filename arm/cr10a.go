@@ -649,12 +649,11 @@ func parseDragSensitivityArgs(cmd map[string]interface{}) (index, value int, err
 // latestFrame fetches the latest feedback frame, blocking briefly if none has
 // arrived yet (typical right after Reconfigure).
 func (a *cr10a) latestFrame(ctx context.Context) (feedbackFrame, error) {
-	fr, ok, err := a.feedback.latest()
+	// A stale-feedback error from latest() is not returned: waitForFrame may
+	// still receive a fresh frame.
+	fr, ok, _ := a.feedback.latest()
 	if ok {
 		return fr, nil
-	}
-	if err != nil && ctx.Err() == nil {
-		// known stale error — try to wait for a fresh frame anyway
 	}
 	return a.feedback.waitForFrame(ctx)
 }

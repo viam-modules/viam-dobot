@@ -19,8 +19,8 @@ func runDashCmd(t *testing.T, reply string, call func(*dashClient) error) (strin
 	t.Helper()
 
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 
 	c := &dashClient{conn: client}
 	c.scanner = bufio.NewScanner(client)
