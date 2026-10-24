@@ -143,23 +143,6 @@ func (r *dashResp) asInts() ([]int, error) {
 	return out, nil
 }
 
-// asFloats decodes the comma-separated result list into float64s.
-func (r *dashResp) asFloats() ([]float64, error) {
-	if r.Result == "" {
-		return nil, nil
-	}
-	parts := strings.Split(r.Result, ",")
-	out := make([]float64, 0, len(parts))
-	for _, p := range parts {
-		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil {
-			return nil, fmt.Errorf("non-float in result %q: %w", r.Result, err)
-		}
-		out = append(out, v)
-	}
-	return out, nil
-}
-
 // parseDashResp expects "ErrorID,{ResultList},CommandName" with the trailing
 // semicolon already stripped by the scanner.
 func parseDashResp(line string) (*dashResp, error) {
